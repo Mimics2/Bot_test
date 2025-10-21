@@ -142,6 +142,7 @@ class Database:
                     (user_id, channel_id)
                 )
                 conn.commit()
+            logger.info(f"✅ Подписка подтверждена: user_id={user_id}, channel_id={channel_id}")
             return True
         except Exception as e:
             logger.error(f"❌ Ошибка подтверждения: {e}")
@@ -157,7 +158,9 @@ class Database:
                     (user_id, channel_id)
                 )
                 result = cursor.fetchone()
-                return result[0] if result else False
+                confirmed = result[0] if result else False
+                logger.info(f"🔍 Проверка подписки: user_id={user_id}, channel_id={channel_id} -> {confirmed}")
+                return confirmed
         except Exception as e:
             logger.error(f"❌ Ошибка проверки: {e}")
             return False
@@ -247,7 +250,7 @@ except Exception as e:
     db = None
 
 async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Проверка подписок пользователя с исправлением для приватных каналов"""
+    """Проверка подписок пользователя"""
     if not db:
         return {"all_subscribed": False, "missing_channels": []}
     
@@ -260,8 +263,12 @@ async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
         "missing_channels": []
     }
     
+    logger.info(f"🔍 Начинаем проверку подписок для пользователя {user.id}")
+    
     for channel in channels:
         channel_id, channel_username, channel_url, channel_name, channel_type, _ = channel
+        
+        logger.info(f"🔍 Проверяем канал: {channel_name} (тип: {channel_type})")
         
         if channel_type == 'public' and channel_username:
             try:
@@ -277,6 +284,10 @@ async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
                         "type": "public",
                         "url": f"https://t.me/{clean_username}"
                     })
+                    logger.info(f"❌ Пользователь {user.id} не подписан на публичный канал {channel_name}")
+                else:
+                    logger.info(f"✅ Пользователь {user.id} подписан на публичный канал {channel_name}")
+                    
             except Exception as e:
                 logger.error(f"Ошибка проверки публичного канала {channel_username}: {e}")
                 result["all_subscribed"] = False
@@ -288,7 +299,7 @@ async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
                 })
         
         elif channel_type == 'private':
-            # Для приватных каналов используем только подтверждение пользователем
+            # Для приватных каналов используем ТОЛЬКО подтверждение пользователем
             confirmed = db.is_subscription_confirmed(user.id, channel_id)
             if not confirmed:
                 result["all_subscribed"] = False
@@ -298,7 +309,11 @@ async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
                     "type": "private",
                     "url": channel_url
                 })
+                logger.info(f"❌ Пользователь {user.id} не подтвердил приватный канал {channel_name}")
+            else:
+                logger.info(f"✅ Пользователь {user.id} подтвердил приватный канал {channel_name}")
     
+    logger.info(f"🔍 Итог проверки: all_subscribed={result['all_subscribed']}, missing={len(result['missing_channels'])}")
     return result
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -374,10 +389,10 @@ async def show_subscription_request(update: Update, context: ContextTypes.DEFAUL
                 )
             ])
         elif channel_info["type"] == "private":
-            # Для приватных каналов показываем обе кнопки
+            # Для приватных каналов показываем кнопку подтверждения
             keyboard.append([
-                InlineKeyboardButton(f"🔗 Перейти: {channel_info['name']}", url=channel_info["url"]),
-                InlineKeyboardButton(f"{BUTTONS['confirm']} {channel_info['name']}", callback_data=f"confirm_{channel_info['id']}")
+                InlineKeyboardButton(f"🔗 {channel_info['name']}", url=channel_info["url"]),
+                InlineKeyboardButton(f"{BUTTONS['confirm']}", callback_data=f"confirm_{channel_info['id']}")
             ])
     
     keyboard.append([InlineKeyboardButton(BUTTONS["check"], callback_data="check_subs")])
@@ -415,8 +430,8 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     admin_text = TEXTS["admin_welcome"].format(
         total_users=total_users,
-        today_checks=0,  # Упрощенная версия
-        today_new=0,     # Упрощенная версия
+        today_checks=0,
+        today_new=0,
         subscription_channels=len(sub_channels),
         referral_channels=len(ref_channels)
     )
@@ -535,6 +550,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     user = update.effective_user
     
+    logger.info(f"🔘 Нажата кнопка: {query.data} пользователем {user.id}")
+    
     if query.data == "check_subs":
         db.add_user(user.id, user.username, user.full_name)
         subscription_status = await check_subscriptions(update, context)
@@ -546,10 +563,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     elif query.data.startswith("confirm_"):
         channel_id = int(query.data.replace("confirm_", ""))
+        logger.info(f"🔘 Подтверждение канала {channel_id} пользователем {user.id}")
         
         if db.confirm_subscription(user.id, channel_id):
-            await query.answer("✅ Подписка подтверждена", show_alert=True)
+            await query.answer("✅ Подписка подтверждена!", show_alert=True)
+            
+            # Сразу проверяем все подписки
             subscription_status = await check_subscriptions(update, context)
+            logger.info(f"🔍 Статус после подтверждения: {subscription_status}")
             
             if subscription_status["all_subscribed"]:
                 await show_success_message(update, context)
@@ -655,6 +676,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         channel_type = context.user_data.get('channel_type')
         text = update.message.text.strip()
         
+        logger.info(f"📨 Получено сообщение для добавления канала: {text}")
+        
         try:
             if channel_type == 'public':
                 parts = text.split(' ', 1)
@@ -665,7 +688,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                     if db.add_subscription_channel(username, url, name, 'public'):
                         await update.message.reply_text(f"✅ Публичный канал '{name}' добавлен")
-                        # Возвращаемся к управлению каналами
+                        # Возвращаемся к управлению каналами через callback
                         await show_manage_channels(update, context)
                     else:
                         await update.message.reply_text("❌ Ошибка при добавлении")
@@ -680,7 +703,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                     if db.add_subscription_channel(None, url, name, 'private'):
                         await update.message.reply_text(f"✅ Приватный канал '{name}' добавлен")
-                        # Возвращаемся к управлению каналами
+                        # Возвращаемся к управлению каналами через callback
                         await show_manage_channels(update, context)
                     else:
                         await update.message.reply_text("❌ Ошибка при добавлении")
@@ -696,7 +719,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                     if db.add_referral_channel(url, name, description):
                         await update.message.reply_text(f"💎 Финальный канал '{name}' добавлен")
-                        # Возвращаемся к управлению каналами
+                        # Возвращаемся к управлению каналами через callback
                         await show_manage_channels(update, context)
                     else:
                         await update.message.reply_text("❌ Ошибка при добавлении")
@@ -707,6 +730,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['awaiting_channel'] = False
             
         except Exception as e:
+            logger.error(f"❌ Ошибка обработки сообщения: {e}")
             await update.message.reply_text(f"❌ Ошибка: {str(e)}")
             context.user_data['awaiting_channel'] = False
 
