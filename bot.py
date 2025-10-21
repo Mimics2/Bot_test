@@ -288,51 +288,16 @@ async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
                 })
         
         elif channel_type == 'private':
-            # ИСПРАВЛЕНИЕ: Проверяем фактическую подписку для приватных каналов
-            if channel_username:
-                try:
-                    clean_username = channel_username.lstrip('@')
-                    chat_member = await bot.get_chat_member(f"@{clean_username}", user.id)
-                    actually_subscribed = chat_member.status in ['member', 'administrator', 'creator']
-                    
-                    if actually_subscribed:
-                        # Автоматически подтверждаем подписку
-                        db.confirm_subscription(user.id, channel_id)
-                    else:
-                        # Сбрасываем подтверждение если пользователь отписался
-                        db.remove_subscription_confirmation(user.id, channel_id)
-                        result["all_subscribed"] = False
-                        result["missing_channels"].append({
-                            "id": channel_id,
-                            "name": channel_name,
-                            "type": "private",
-                            "url": channel_url
-                        })
-                        
-                except Exception as e:
-                    # Если не можем проверить (например, бот не добавлен в канал),
-                    # то используем подтверждение из базы данных
-                    logger.error(f"Ошибка проверки приватного канала {channel_username}: {e}")
-                    confirmed = db.is_subscription_confirmed(user.id, channel_id)
-                    if not confirmed:
-                        result["all_subscribed"] = False
-                        result["missing_channels"].append({
-                            "id": channel_id,
-                            "name": channel_name,
-                            "type": "private", 
-                            "url": channel_url
-                        })
-            else:
-                # Если username не указан, используем только подтверждение
-                confirmed = db.is_subscription_confirmed(user.id, channel_id)
-                if not confirmed:
-                    result["all_subscribed"] = False
-                    result["missing_channels"].append({
-                        "id": channel_id,
-                        "name": channel_name,
-                        "type": "private",
-                        "url": channel_url
-                    })
+            # Для приватных каналов используем только подтверждение пользователем
+            confirmed = db.is_subscription_confirmed(user.id, channel_id)
+            if not confirmed:
+                result["all_subscribed"] = False
+                result["missing_channels"].append({
+                    "id": channel_id,
+                    "name": channel_name,
+                    "type": "private",
+                    "url": channel_url
+                })
     
     return result
 
@@ -471,7 +436,10 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_manage_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показ управления каналами"""
     if not db:
-        await update.callback_query.edit_message_text("❌ База данных недоступна")
+        if update.callback_query:
+            await update.callback_query.edit_message_text("❌ База данных недоступна")
+        else:
+            await update.message.reply_text("❌ База данных недоступна")
         return
     
     sub_channels = db.get_subscription_channels()
@@ -502,7 +470,11 @@ async def show_manage_channels(update: Update, context: ContextTypes.DEFAULT_TYP
     keyboard.append([InlineKeyboardButton(BUTTONS["back"], callback_data="admin_panel")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+    
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+    else:
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
 
 async def show_delete_subscription_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показ каналов для удаления"""
@@ -693,6 +665,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                     if db.add_subscription_channel(username, url, name, 'public'):
                         await update.message.reply_text(f"✅ Публичный канал '{name}' добавлен")
+                        # Возвращаемся к управлению каналами
+                        await show_manage_channels(update, context)
                     else:
                         await update.message.reply_text("❌ Ошибка при добавлении")
                 else:
@@ -706,6 +680,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                     if db.add_subscription_channel(None, url, name, 'private'):
                         await update.message.reply_text(f"✅ Приватный канал '{name}' добавлен")
+                        # Возвращаемся к управлению каналами
+                        await show_manage_channels(update, context)
                     else:
                         await update.message.reply_text("❌ Ошибка при добавлении")
                 else:
@@ -720,14 +696,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                     if db.add_referral_channel(url, name, description):
                         await update.message.reply_text(f"💎 Финальный канал '{name}' добавлен")
+                        # Возвращаемся к управлению каналами
+                        await show_manage_channels(update, context)
                     else:
                         await update.message.reply_text("❌ Ошибка при добавлении")
                 else:
                     await update.message.reply_text("❌ Неверный формат. Используйте: ссылка Название [Описание]")
             
-            # Возвращаемся к управлению каналами
+            # Сбрасываем флаг ожидания
             context.user_data['awaiting_channel'] = False
-            await show_manage_channels(update, context)
             
         except Exception as e:
             await update.message.reply_text(f"❌ Ошибка: {str(e)}")
