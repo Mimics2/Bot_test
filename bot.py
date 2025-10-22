@@ -250,7 +250,7 @@ except Exception as e:
     db = None
 
 async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Проверка подписок пользователя"""
+    """Проверка подписок пользователя с реальной проверкой через API"""
     if not db:
         return {"all_subscribed": False, "missing_channels": []}
     
@@ -299,20 +299,63 @@ async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
                 })
         
         elif channel_type == 'private':
-            # 🔥 КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Для приватных каналов всегда считаем, что пользователь НЕ подписан
-            # и требуем ручного подтверждения через кнопку
-            confirmed = db.is_subscription_confirmed(user.id, channel_id)
-            if not confirmed:
-                result["all_subscribed"] = False
-                result["missing_channels"].append({
-                    "id": channel_id,
-                    "name": channel_name,
-                    "type": "private",
-                    "url": channel_url
-                })
-                logger.info(f"❌ Пользователь {user.id} не подтвердил приватный канал {channel_name}")
-            else:
-                logger.info(f"✅ Пользователь {user.id} подтвердил приватный канал {channel_name}")
+            # Для приватных каналов сначала проверяем реальную подписку через API
+            try:
+                # Пытаемся получить информацию о канале
+                chat = await bot.get_chat(channel_url)
+                
+                # Пробуем получить статус пользователя в канале
+                try:
+                    chat_member = await bot.get_chat_member(chat.id, user.id)
+                    subscribed = chat_member.status in ['member', 'administrator', 'creator']
+                    
+                    if not subscribed:
+                        result["all_subscribed"] = False
+                        result["missing_channels"].append({
+                            "id": channel_id,
+                            "name": channel_name,
+                            "type": "private",
+                            "url": channel_url
+                        })
+                        logger.info(f"❌ Пользователь {user.id} не подписан на приватный канал {channel_name}")
+                    else:
+                        # Если подписан, автоматически подтверждаем подписку
+                        db.confirm_subscription(user.id, channel_id)
+                        logger.info(f"✅ Пользователь {user.id} подписан на приватный канал {channel_name} - автоматическое подтверждение")
+                        
+                except Exception as e:
+                    # Если не можем проверить статус (пользователь не подписан или бот не имеет прав)
+                    logger.warning(f"Не удалось проверить подписку на приватный канал {channel_name}: {e}")
+                    
+                    # Используем подтверждение пользователем как запасной вариант
+                    confirmed = db.is_subscription_confirmed(user.id, channel_id)
+                    if not confirmed:
+                        result["all_subscribed"] = False
+                        result["missing_channels"].append({
+                            "id": channel_id,
+                            "name": channel_name,
+                            "type": "private",
+                            "url": channel_url
+                        })
+                        logger.info(f"❌ Пользователь {user.id} не подтвердил приватный канал {channel_name}")
+                    else:
+                        logger.info(f"✅ Пользователь {user.id} подтвердил приватный канал {channel_name}")
+                        
+            except Exception as e:
+                logger.error(f"Ошибка доступа к приватному каналу {channel_url}: {e}")
+                # Если не можем получить доступ к каналу, используем подтверждение
+                confirmed = db.is_subscription_confirmed(user.id, channel_id)
+                if not confirmed:
+                    result["all_subscribed"] = False
+                    result["missing_channels"].append({
+                        "id": channel_id,
+                        "name": channel_name,
+                        "type": "private",
+                        "url": channel_url
+                    })
+                    logger.info(f"❌ Пользователь {user.id} не подтвердил приватный канал {channel_name}")
+                else:
+                    logger.info(f"✅ Пользователь {user.id} подтвердил приватный канал {channel_name}")
     
     logger.info(f"🔍 Итог проверки: all_subscribed={result['all_subscribed']}, missing={len(result['missing_channels'])}")
     return result
