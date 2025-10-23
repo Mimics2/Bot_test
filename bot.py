@@ -299,20 +299,20 @@ async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
                 })
         
         elif channel_type == 'private':
-            # Для приватных каналов - только ручное подтверждение
-            # Удаляем любые предыдущие подтверждения при каждой проверке
-            db.remove_subscription_confirmation(user.id, channel_id)
+            # Для приватных каналов проверяем подтверждение в базе данных
+            is_confirmed = db.is_subscription_confirmed(user.id, channel_id)
             
-            # Всегда считаем, что пользователь не подписан на приватный канал
-            # и требует подтверждения
-            result["all_subscribed"] = False
-            result["missing_channels"].append({
-                "id": channel_id,
-                "name": channel_name,
-                "type": "private",
-                "url": channel_url
-            })
-            logger.info(f"🔒 Требуется подтверждение для приватного канала {channel_name}")
+            if not is_confirmed:
+                result["all_subscribed"] = False
+                result["missing_channels"].append({
+                    "id": channel_id,
+                    "name": channel_name,
+                    "type": "private",
+                    "url": channel_url
+                })
+                logger.info(f"🔒 Требуется подтверждение для приватного канала {channel_name}")
+            else:
+                logger.info(f"✅ Подписка на приватный канал {channel_name} подтверждена")
     
     logger.info(f"🔍 Итог проверки: all_subscribed={result['all_subscribed']}, missing={len(result['missing_channels'])}")
     return result
@@ -369,7 +369,13 @@ async def show_success_message(update: Update, context: ContextTypes.DEFAULT_TYP
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     if update.callback_query:
-        await update.callback_query.edit_message_text(success_text, reply_markup=reply_markup, parse_mode='Markdown')
+        try:
+            await update.callback_query.edit_message_text(success_text, reply_markup=reply_markup, parse_mode='Markdown')
+        except Exception as e:
+            if "Message is not modified" in str(e):
+                logger.info("Сообщение не изменилось, пропускаем")
+            else:
+                raise
     else:
         await update.message.reply_text(success_text, reply_markup=reply_markup, parse_mode='Markdown')
 
@@ -411,7 +417,13 @@ async def show_subscription_request(update: Update, context: ContextTypes.DEFAUL
         request_text = "📋 Необходимо подписаться на каналы"
     
     if update.callback_query:
-        await update.callback_query.edit_message_text(request_text, reply_markup=reply_markup, parse_mode='Markdown')
+        try:
+            await update.callback_query.edit_message_text(request_text, reply_markup=reply_markup, parse_mode='Markdown')
+        except Exception as e:
+            if "Message is not modified" in str(e):
+                logger.info("Сообщение не изменилось, пропускаем")
+            else:
+                raise
     else:
         await update.message.reply_text(request_text, reply_markup=reply_markup, parse_mode='Markdown')
 
@@ -576,7 +588,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if subscription_status["all_subscribed"]:
                 await show_success_message(update, context)
             else:
-                await show_subscription_request(update, context, subscription_status["missing_channels"])
+                # Обновляем сообщение только если есть изменения
+                try:
+                    await show_subscription_request(update, context, subscription_status["missing_channels"])
+                except Exception as e:
+                    if "Message is not modified" in str(e):
+                        # Игнорируем ошибку, если сообщение не изменилось
+                        logger.info("Сообщение не изменилось, пропускаем")
+                    else:
+                        raise
         else:
             await query.answer("❌ Ошибка подтверждения", show_alert=True)
     
