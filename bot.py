@@ -566,6 +566,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"🔘 Нажата кнопка: {query.data} пользователем {user.id}")
     
     if query.data == "check_subs":
+        # УДАЛЯЕМ ВСЕ ПОДТВЕРЖДЕНИЯ ПРИ КАЖДОЙ ПРОВЕРКЕ
+        channels = db.get_subscription_channels()
+        for channel in channels:
+            channel_id, _, _, _, channel_type, _ = channel
+            if channel_type == 'private':
+                db.remove_subscription_confirmation(user.id, channel_id)
+        
         db.add_user(user.id, user.username, user.full_name)
         subscription_status = await check_subscriptions(update, context)
         
