@@ -250,7 +250,7 @@ except Exception as e:
     db = None
 
 async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Проверка подписок пользователя с реальной проверкой через API"""
+    """Проверка подписок пользователя"""
     if not db:
         return {"all_subscribed": False, "missing_channels": []}
     
@@ -299,63 +299,20 @@ async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
                 })
         
         elif channel_type == 'private':
-            # Для приватных каналов сначала проверяем реальную подписку через API
-            try:
-                # Пытаемся получить информацию о канале
-                chat = await bot.get_chat(channel_url)
-                
-                # Пробуем получить статус пользователя в канале
-                try:
-                    chat_member = await bot.get_chat_member(chat.id, user.id)
-                    subscribed = chat_member.status in ['member', 'administrator', 'creator']
-                    
-                    if not subscribed:
-                        result["all_subscribed"] = False
-                        result["missing_channels"].append({
-                            "id": channel_id,
-                            "name": channel_name,
-                            "type": "private",
-                            "url": channel_url
-                        })
-                        logger.info(f"❌ Пользователь {user.id} не подписан на приватный канал {channel_name}")
-                    else:
-                        # Если подписан, автоматически подтверждаем подписку
-                        db.confirm_subscription(user.id, channel_id)
-                        logger.info(f"✅ Пользователь {user.id} подписан на приватный канал {channel_name} - автоматическое подтверждение")
-                        
-                except Exception as e:
-                    # Если не можем проверить статус (пользователь не подписан или бот не имеет прав)
-                    logger.warning(f"Не удалось проверить подписку на приватный канал {channel_name}: {e}")
-                    
-                    # Используем подтверждение пользователем как запасной вариант
-                    confirmed = db.is_subscription_confirmed(user.id, channel_id)
-                    if not confirmed:
-                        result["all_subscribed"] = False
-                        result["missing_channels"].append({
-                            "id": channel_id,
-                            "name": channel_name,
-                            "type": "private",
-                            "url": channel_url
-                        })
-                        logger.info(f"❌ Пользователь {user.id} не подтвердил приватный канал {channel_name}")
-                    else:
-                        logger.info(f"✅ Пользователь {user.id} подтвердил приватный канал {channel_name}")
-                        
-            except Exception as e:
-                logger.error(f"Ошибка доступа к приватному каналу {channel_url}: {e}")
-                # Если не можем получить доступ к каналу, используем подтверждение
-                confirmed = db.is_subscription_confirmed(user.id, channel_id)
-                if not confirmed:
-                    result["all_subscribed"] = False
-                    result["missing_channels"].append({
-                        "id": channel_id,
-                        "name": channel_name,
-                        "type": "private",
-                        "url": channel_url
-                    })
-                    logger.info(f"❌ Пользователь {user.id} не подтвердил приватный канал {channel_name}")
-                else:
-                    logger.info(f"✅ Пользователь {user.id} подтвердил приватный канал {channel_name}")
+            # Для приватных каналов - только ручное подтверждение
+            # Удаляем любые предыдущие подтверждения при каждой проверке
+            db.remove_subscription_confirmation(user.id, channel_id)
+            
+            # Всегда считаем, что пользователь не подписан на приватный канал
+            # и требует подтверждения
+            result["all_subscribed"] = False
+            result["missing_channels"].append({
+                "id": channel_id,
+                "name": channel_name,
+                "type": "private",
+                "url": channel_url
+            })
+            logger.info(f"🔒 Требуется подтверждение для приватного канала {channel_name}")
     
     logger.info(f"🔍 Итог проверки: all_subscribed={result['all_subscribed']}, missing={len(result['missing_channels'])}")
     return result
@@ -689,6 +646,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['channel_type'] = 'private'
             await query.edit_message_text(
                 "➕ Добавление приватного канала:\n\n"
+                "⚠️ ВАЖНО: Для приватных каналов бот НЕ МОЖЕТ проверить реальную подписку!\n"
+                "Пользователи будут получать доступ только после нажатия кнопки 'Подтвердить'.\n\n"
                 "Введите в формате:\n"
                 "ссылка Название_канала\n\n"
                 "📝 Пример:\n"
@@ -746,7 +705,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     name = parts[1]
                     
                     if db.add_subscription_channel(None, url, name, 'private'):
-                        await update.message.reply_text(f"✅ Приватный канал '{name}' добавлен")
+                        await update.message.reply_text(f"✅ Приватный канал '{name}' добавлен\n\n"
+                                                       "⚠️ Напоминание: Для приватных каналов бот не может проверить реальную подписку. "
+                                                       "Пользователи будут получать доступ после нажатия кнопки 'Подтвердить'.")
                         # Возвращаемся к управлению каналами через callback
                         await show_manage_channels(update, context)
                     else:
