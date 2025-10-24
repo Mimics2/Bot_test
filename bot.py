@@ -300,7 +300,6 @@ async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         elif channel_type == 'private':
             # ДЛЯ ПРИВАТНЫХ КАНАЛОВ: проверяем только подтверждение в базе данных
-            # Для приватных каналов мы НЕ МОЖЕМ проверить подписку через API
             is_confirmed = db.is_subscription_confirmed(user.id, channel_id)
             
             if not is_confirmed:
@@ -309,12 +308,11 @@ async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
                     "id": channel_id,
                     "name": channel_name,
                     "type": "private", 
-                    "url": channel_url,
-                    "confirmed": False
+                    "url": channel_url
                 })
-                logger.info(f"🔒 Требуется подтверждение для приватного канала {channel_name}")
+                logger.info(f"🔒 Пользователь {user.id} не подтвердил подписку на приватный канал {channel_name}")
             else:
-                logger.info(f"✅ Подписка на приватный канал {channel_name} подтверждена")
+                logger.info(f"✅ Подписка на приватный канал {channel_name} подтверждена пользователем {user.id}")
     
     logger.info(f"🔍 Итог проверки: all_subscribed={result['all_subscribed']}, missing={len(result['missing_channels'])}")
     return result
@@ -575,6 +573,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             channel_id, _, _, _, channel_type, _ = channel
             if channel_type == 'private':
                 db.remove_subscription_confirmation(user.id, channel_id)
+                logger.info(f"🗑️ Удалено подтверждение для приватного канала {channel_id} пользователя {user.id}")
         
         db.add_user(user.id, user.username, user.full_name)
         subscription_status = await check_subscriptions(update, context)
