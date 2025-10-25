@@ -299,7 +299,7 @@ async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
                 })
         
         elif channel_type == 'private':
-            # ДЛЯ ПРИВАТНЫХ КАНАЛОВ: проверяем только подтверждение в базе данных
+            # Для приватных каналов проверяем подтверждение в базе данных
             is_confirmed = db.is_subscription_confirmed(user.id, channel_id)
             
             if not is_confirmed:
@@ -307,12 +307,12 @@ async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
                 result["missing_channels"].append({
                     "id": channel_id,
                     "name": channel_name,
-                    "type": "private", 
+                    "type": "private",
                     "url": channel_url
                 })
-                logger.info(f"🔒 Пользователь {user.id} не подтвердил подписку на приватный канал {channel_name}")
+                logger.info(f"🔒 Требуется подтверждение для приватного канала {channel_name}")
             else:
-                logger.info(f"✅ Подписка на приватный канал {channel_name} подтверждена пользователем {user.id}")
+                logger.info(f"✅ Подписка на приватный канал {channel_name} подтверждена")
     
     logger.info(f"🔍 Итог проверки: all_subscribed={result['all_subscribed']}, missing={len(result['missing_channels'])}")
     return result
@@ -399,7 +399,7 @@ async def show_subscription_request(update: Update, context: ContextTypes.DEFAUL
             # Для приватных каналов показываем кнопку подтверждения
             keyboard.append([
                 InlineKeyboardButton(f"🔗 {channel_info['name']}", url=channel_info["url"]),
-                InlineKeyboardButton(f"✅ {BUTTONS['confirm']}", callback_data=f"confirm_{channel_info['id']}")
+                InlineKeyboardButton(f"{BUTTONS['confirm']}", callback_data=f"confirm_{channel_info['id']}")
             ])
     
     keyboard.append([InlineKeyboardButton(BUTTONS["check"], callback_data="check_subs")])
@@ -410,8 +410,7 @@ async def show_subscription_request(update: Update, context: ContextTypes.DEFAUL
         channels_list = ""
         for channel in missing_channels:
             icon = "📺" if channel["type"] == "public" else "🔒"
-            status = " (требуется подписка)" if channel["type"] == "public" else " (требуется подтверждение)"
-            channels_list += f"{icon} {channel['name']}{status}\n"
+            channels_list += f"{icon} {channel['name']}\n"
         
         request_text = TEXTS["subscription_required"].format(channels_list=channels_list)
     else:
@@ -567,13 +566,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"🔘 Нажата кнопка: {query.data} пользователем {user.id}")
     
     if query.data == "check_subs":
-        # УДАЛЯЕМ ВСЕ ПОДТВЕРЖДЕНИЯ ПРИ КАЖДОЙ ПРОВЕРКЕ (только для приватных)
+        # УДАЛЯЕМ ВСЕ ПОДТВЕРЖДЕНИЯ ПРИ КАЖДОЙ ПРОВЕРКЕ
         channels = db.get_subscription_channels()
         for channel in channels:
             channel_id, _, _, _, channel_type, _ = channel
             if channel_type == 'private':
                 db.remove_subscription_confirmation(user.id, channel_id)
-                logger.info(f"🗑️ Удалено подтверждение для приватного канала {channel_id} пользователя {user.id}")
         
         db.add_user(user.id, user.username, user.full_name)
         subscription_status = await check_subscriptions(update, context)
@@ -587,8 +585,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         channel_id = int(query.data.replace("confirm_", ""))
         logger.info(f"🔘 Подтверждение канала {channel_id} пользователем {user.id}")
         
-        # ДЛЯ ПРИВАТНЫХ КАНАЛОВ: не проверяем реальную подписку, так как это невозможно
-        # Просто подтверждаем, что пользователь утверждает, что подписан
         if db.confirm_subscription(user.id, channel_id):
             await query.answer("✅ Подписка подтверждена!", show_alert=True)
             
@@ -735,7 +731,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     url = parts[0]
                     name = parts[1]
                     
-                    # Для приватных каналов username оставляем пустым
                     if db.add_subscription_channel(None, url, name, 'private'):
                         await update.message.reply_text(f"✅ Приватный канал '{name}' добавлен\n\n"
                                                        "⚠️ Напоминание: Для приватных каналов бот не может проверить реальную подписку. "
