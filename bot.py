@@ -2,9 +2,10 @@ import logging
 import sqlite3
 import os
 import sys
+import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
-from telegram.error import BadRequest
+from telegram.error import BadRequest, Forbidden
 
 # Импортируем конфигурацию
 try:
@@ -236,7 +237,7 @@ except Exception as e:
     db = None
 
 async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Проверка подписок - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
+    """Проверка подписок - ПОЛНОСТЬЮ ПЕРЕРАБОТАННАЯ ВЕРСИЯ"""
     if not db:
         return {"all_subscribed": False, "missing_channels": []}
     
@@ -254,80 +255,112 @@ async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
                 clean_username = channel_username.lstrip('@')
                 logger.info(f"🔍 Проверяю канал @{clean_username} для пользователя {user.id}")
                 
-                # Пробуем несколько способов обращения к каналу
-                chat_identifiers = [
-                    f"@{clean_username}",
-                    clean_username,
-                    channel_url.replace("https://t.me/", "").lstrip('@')
-                ]
+                # Очищаем username от лишних символов
+                clean_username = re.sub(r'[^a-zA-Z0-9_]', '', clean_username)
                 
-                subscribed = False
-                channel_accessible = False
-                
-                for identifier in chat_identifiers:
-                    try:
-                        # Сначала проверяем существование чата
-                        chat = await bot.get_chat(identifier)
-                        logger.info(f"✅ Чат {identifier} существует: {chat.title}")
-                        channel_accessible = True
-                        
-                        # Затем проверяем подписку пользователя
-                        chat_member = await bot.get_chat_member(identifier, user.id)
-                        subscribed = chat_member.status in ['member', 'administrator', 'creator']
-                        
-                        if subscribed:
-                            logger.info(f"✅ Пользователь {user.id} подписан на {channel_name} через {identifier}")
-                            break
-                        else:
-                            logger.info(f"❌ Пользователь {user.id} НЕ подписан на {channel_name}")
-                            break
-                            
-                    except BadRequest as e:
-                        error_message = str(e).lower()
-                        
-                        if "chat not found" in error_message or "channel not found" in error_message:
-                            logger.warning(f"⚠️ Чат {identifier} не существует: {e}")
-                            break
-                        elif "user not found" in error_message:
-                            logger.warning(f"⚠️ Пользователь не найден при проверке {identifier}: {e}")
-                            continue
-                        elif "not enough rights" in error_message:
-                            logger.warning(f"⚠️ Недостаточно прав для проверки {identifier}: {e}")
-                            break
-                        else:
-                            logger.warning(f"⚠️ Ошибка при проверке {identifier}: {e}")
-                            continue
-                            
-                    except Exception as e:
-                        logger.warning(f"⚠️ Неизвестная ошибка при проверке {identifier}: {e}")
-                        continue
-                
-                # Если канал доступен и пользователь не подписан - добавляем в список
-                if channel_accessible and not subscribed:
+                if not clean_username:
+                    logger.error(f"❌ Неверный username канала: {channel_username}")
                     result["all_subscribed"] = False
                     result["missing_channels"].append({
                         "id": channel_id,
                         "name": channel_name,
                         "type": "public",
-                        "url": f"https://t.me/{clean_username}",
-                        "accessible": True
+                        "url": channel_url,
+                        "accessible": False,
+                        "error": "Неверный username канала"
                     })
-                elif not channel_accessible:
-                    # Если канал недоступен, считаем что пользователь не подписан
+                    continue
+                
+                subscribed = False
+                channel_accessible = False
+                last_error = None
+                
+                try:
+                    # Пытаемся получить чат по username
+                    chat = await bot.get_chat(f"@{clean_username}")
+                    channel_accessible = True
+                    logger.info(f"✅ Чат доступен: {chat.title}")
+                    
+                    # Проверяем подписку пользователя
+                    try:
+                        chat_member = await bot.get_chat_member(chat.id, user.id)
+                        status = chat_member.status
+                        subscribed = status in ['member', 'administrator', 'creator', 'restricted']
+                        
+                        logger.info(f"📊 Статус пользователя {user.id} в канале {channel_name}: {status}")
+                        
+                        if not subscribed:
+                            logger.info(f"❌ Пользователь {user.id} НЕ подписан на {channel_name}")
+                        else:
+                            logger.info(f"✅ Пользователь {user.id} подписан на {channel_name}")
+                            
+                    except BadRequest as e:
+                        error_msg = str(e).lower()
+                        if "user not found" in error_msg or "user not participant" in error_msg:
+                            logger.info(f"❌ Пользователь {user.id} не найден в канале {channel_name}")
+                            subscribed = False
+                        else:
+                            logger.error(f"🔴 Ошибка проверки подписки: {e}")
+                            last_error = e
+                            subscribed = False
+                    
+                except BadRequest as e:
+                    error_msg = str(e).lower()
+                    last_error = e
+                    
+                    if "chat not found" in error_msg:
+                        logger.error(f"❌ Чат @{clean_username} не существует")
+                        channel_accessible = False
+                    elif "not enough rights" in error_msg:
+                        logger.error(f"🔐 Недостаточно прав для проверки канала @{clean_username}")
+                        channel_accessible = False
+                    else:
+                        logger.error(f"🔴 Неизвестная ошибка BadRequest: {e}")
+                        channel_accessible = False
+                        
+                except Forbidden as e:
+                    logger.error(f"🚫 Доступ к каналу @{clean_username} запрещен")
+                    channel_accessible = False
+                    last_error = e
+                    
+                except Exception as e:
+                    logger.error(f"🔴 Неизвестная ошибка при проверке канала: {e}")
+                    channel_accessible = False
+                    last_error = e
+                
+                # Обрабатываем результат проверки
+                if channel_accessible:
+                    if not subscribed:
+                        result["all_subscribed"] = False
+                        result["missing_channels"].append({
+                            "id": channel_id,
+                            "name": channel_name,
+                            "type": "public",
+                            "url": f"https://t.me/{clean_username}",
+                            "accessible": True
+                        })
+                else:
+                    # Канал недоступен - считаем что пользователь не подписан
                     result["all_subscribed"] = False
+                    error_msg = "Канал недоступен"
+                    if last_error:
+                        if "chat not found" in str(last_error).lower():
+                            error_msg = "Канал не существует"
+                        elif "not enough rights" in str(last_error).lower():
+                            error_msg = "Бот не имеет прав для проверки"
+                    
                     result["missing_channels"].append({
                         "id": channel_id,
                         "name": channel_name,
-                        "type": "public", 
+                        "type": "public",
                         "url": f"https://t.me/{clean_username}",
                         "accessible": False,
-                        "error": "Канал недоступен для проверки"
+                        "error": error_msg
                     })
-                    logger.warning(f"🚫 Канал {channel_name} недоступен для проверки")
+                    logger.warning(f"🚫 Канал {channel_name} недоступен: {error_msg}")
                     
             except Exception as e:
                 logger.error(f"🔴 Критическая ошибка проверки канала {channel_name}: {e}")
-                # При любой ошибке считаем что пользователь не подписан
                 result["all_subscribed"] = False
                 result["missing_channels"].append({
                     "id": channel_id,
@@ -354,7 +387,7 @@ async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
     return result
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Старт бота - универсальное приветствие"""
+    """Старт бота"""
     if not db:
         await update.message.reply_text("🔧 Технические работы... Попробуйте позже")
         return
@@ -443,7 +476,7 @@ async def show_success_message(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text(success_text, reply_markup=reply_markup, parse_mode='Markdown')
 
 async def show_subscription_request(update: Update, context: ContextTypes.DEFAULT_TYPE, missing_channels=None):
-    """Запрос подписки - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
+    """Запрос подписки"""
     if not missing_channels:
         missing_channels = []
     
@@ -452,11 +485,11 @@ async def show_subscription_request(update: Update, context: ContextTypes.DEFAUL
     for channel_info in missing_channels:
         if channel_info["type"] == "public":
             if not channel_info.get("accessible", True):
-                # Для недоступных каналов показываем сообщение об ошибке
+                # Для недоступных каналов показываем информационную кнопку
                 keyboard.append([
                     InlineKeyboardButton(
-                        f"⚠️ {channel_info['name']} (ошибка проверки)",
-                        callback_data="unavailable_channel"
+                        f"⚠️ {channel_info['name']} ({channel_info.get('error', 'ошибка')})",
+                        callback_data="channel_check_error"
                     )
                 ])
             else:
@@ -475,25 +508,31 @@ async def show_subscription_request(update: Update, context: ContextTypes.DEFAUL
     
     keyboard.append([InlineKeyboardButton("🔄 Проверить подписки", callback_data="check_subs")])
     
+    # Добавляем кнопку для админа для проверки каналов
+    if update.effective_user.id == ADMIN_ID:
+        keyboard.append([InlineKeyboardButton("🔧 Проверить настройки каналов", callback_data="check_channel_settings")])
+    
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     if missing_channels:
         channels_list = ""
+        error_channels = []
+        
         for channel in missing_channels:
             if channel.get("accessible", True):
                 icon = "📺" if channel["type"] == "public" else "🔒"
                 status = " (подписка)" if channel["type"] == "public" else " (подтверждение)"
                 channels_list += f"{icon} {channel['name']}{status}\n"
             else:
-                channels_list += f"⚠️ {channel['name']} (ошибка проверки)\n"
+                channels_list += f"⚠️ {channel['name']} ({channel.get('error', 'ошибка проверки')})\n"
+                error_channels.append(channel)
         
         request_text = f"📋 *Требуются действия:*\n\n{channels_list}\n🔐 После выполнения нажмите 'Проверить подписки'"
         
-        # Добавляем предупреждение для админа о проблемных каналах
-        if update.effective_user.id == ADMIN_ID:
-            problematic_channels = [ch for ch in missing_channels if not ch.get("accessible", True)]
-            if problematic_channels:
-                request_text += f"\n\n⚡️ *Админу:* {len(problematic_channels)} каналов недоступны для проверки"
+        # Добавляем информацию об ошибках для админа
+        if update.effective_user.id == ADMIN_ID and error_channels:
+            request_text += f"\n\n⚡️ *Для админа:* {len(error_channels)} каналов имеют проблемы с проверкой"
+    
     else:
         request_text = "✅ Все проверки пройдены! Доступ открыт."
     
@@ -633,6 +672,78 @@ async def show_delete_referral_channels(update: Update, context: ContextTypes.DE
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
 
+async def check_channel_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Проверка настроек каналов для админа"""
+    if not db:
+        await update.callback_query.edit_message_text("🔴 База данных недоступна")
+        return
+    
+    channels = db.get_subscription_channels()
+    bot = context.bot
+    
+    check_results = "🔧 *Проверка настроек каналов:*\n\n"
+    
+    for channel in channels:
+        channel_id, channel_username, channel_url, channel_name, channel_type, _ = channel
+        
+        if channel_type == 'public' and channel_username:
+            clean_username = channel_username.lstrip('@')
+            check_results += f"📺 *{channel_name}* (@{clean_username})\n"
+            
+            try:
+                # Пытаемся получить информацию о канале
+                chat = await bot.get_chat(f"@{clean_username}")
+                check_results += "   ✅ Канал существует\n"
+                
+                # Проверяем права бота
+                try:
+                    bot_member = await bot.get_chat_member(chat.id, bot.id)
+                    if bot_member.status in ['administrator', 'creator']:
+                        check_results += "   ✅ Бот - администратор\n"
+                        
+                        # Проверяем конкретные права
+                        if hasattr(bot_member, 'can_restrict_members') and bot_member.can_restrict_members:
+                            check_results += "   ✅ Есть права на управление участниками\n"
+                        else:
+                            check_results += "   ⚠️ Нет прав на управление участниками\n"
+                            
+                        if hasattr(bot_member, 'can_invite_users') and bot_member.can_invite_users:
+                            check_results += "   ✅ Есть права на приглашение\n"
+                        else:
+                            check_results += "   ⚠️ Нет прав на приглашение\n"
+                    else:
+                        check_results += "   ❌ Бот НЕ администратор\n"
+                        
+                except Exception as e:
+                    check_results += f"   ❌ Ошибка проверки прав: {e}\n"
+                    
+            except BadRequest as e:
+                if "chat not found" in str(e).lower():
+                    check_results += "   ❌ Канал не существует\n"
+                elif "not enough rights" in str(e).lower():
+                    check_results += "   ❌ Нет доступа к каналу\n"
+                else:
+                    check_results += f"   ❌ Ошибка: {e}\n"
+            except Exception as e:
+                check_results += f"   ❌ Ошибка: {e}\n"
+            
+            check_results += "\n"
+    
+    check_results += "💡 *Рекомендации:*\n"
+    check_results += "• Убедитесь, что бот добавлен как администратор\n"
+    check_results += "• Дайте боту права 'Просмотр участников'\n"
+    check_results += "• Проверьте username канала в настройках бота\n"
+    
+    keyboard = [
+        [InlineKeyboardButton("🔄 Проверить подписки", callback_data="check_subs")],
+        [InlineKeyboardButton("⚙️ Управление каналами", callback_data="manage_channels")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.callback_query.edit_message_text(check_results, reply_markup=reply_markup, parse_mode='Markdown')
+
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик кнопок"""
     query = update.callback_query
@@ -759,8 +870,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.answer("🚫 Недостаточно прав", show_alert=True)
     
-    elif query.data == "unavailable_channel":
-        await query.answer("⚠️ Этот канал недоступен для проверки. Обратитесь к администратору.", show_alert=True)
+    elif query.data == "channel_check_error":
+        await query.answer(
+            "⚠️ Проблема с проверкой этого канала. "
+            "Убедитесь, что:\n"
+            "• Канал существует\n"
+            "• Бот - администратор канала\n"
+            "• У бота есть права на просмотр участников", 
+            show_alert=True
+        )
+    
+    elif query.data == "check_channel_settings":
+        if user.id == ADMIN_ID:
+            await check_channel_settings(update, context)
+        else:
+            await query.answer("🚫 Недостаточно прав", show_alert=True)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик сообщений для добавления каналов"""
