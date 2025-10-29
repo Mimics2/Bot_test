@@ -286,15 +286,28 @@ async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
     return result
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Старт бота"""
+    """Старт бота - улучшенное приветствие"""
     if not db:
-        await update.message.reply_text("🔧 Техработы... Попробуй позже")
+        await update.message.reply_text("🔧 Технические работы... Попробуйте позже")
         return
     
     user = update.effective_user
     db.add_user(user.id, user.username, user.full_name)
     
-    await update.message.reply_text("👋 Привет! Проверю подписки...")
+    # УЛУЧШЕННОЕ ПРИВЕТСТВИЕ ДЛЯ ПРОДАЖ
+    welcome_text = (
+        "🎉 *Добро пожаловать!*\n\n"
+        "🤖 *Premium Subscription Bot* - ваш надежный помощник для управления доступом к эксклюзивному контенту\n\n"
+        "✨ *Возможности:*\n"
+        "• ✅ Автопроверка подписок\n"
+        "• 🔒 Защита приватных каналов\n"
+        "• 📊 Удобная админ-панель\n"
+        "• 💰 Монетизация контента\n\n"
+        "🚀 *Готов к использованию!* Просто добавьте каналы через админ-панель и начните зарабатывать!\n\n"
+        "⚡️ Проверяю ваши подписки..."
+    )
+    
+    await update.message.reply_text(welcome_text, parse_mode='Markdown')
     
     subscription_status = await check_subscriptions(update, context)
     
@@ -303,30 +316,56 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await show_subscription_request(update, context, subscription_status["missing_channels"])
 
+async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда проверки подписок"""
+    if not db:
+        await update.message.reply_text("🔧 Технические работы... Попробуйте позже")
+        return
+    
+    user = update.effective_user
+    db.add_user(user.id, user.username, user.full_name)
+    
+    await update.message.reply_text("🔄 Проверяю подписки...")
+    
+    subscription_status = await check_subscriptions(update, context)
+    
+    if subscription_status["all_subscribed"]:
+        await show_success_message(update, context)
+    else:
+        await show_subscription_request(update, context, subscription_status["missing_channels"])
+
+async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда админ-панели"""
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("🚫 Недостаточно прав")
+        return
+        
+    await show_admin_panel(update, context)
+
 async def show_success_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Успешная проверка"""
     referral_channels = db.get_referral_channels()
     
     if not referral_channels:
-        message = "✅ Все подписки активны!"
+        message = "✅ *Все проверки пройдены!*\n\nДоступ к контенту открыт 🎉"
         if update.callback_query:
-            await update.callback_query.edit_message_text(message)
+            await update.callback_query.edit_message_text(message, parse_mode='Markdown')
         else:
-            await update.message.reply_text(message)
+            await update.message.reply_text(message, parse_mode='Markdown')
         return
     
     channel = referral_channels[0]
     channel_id, channel_url, channel_name, description, _ = channel
     
-    success_text = f"🎉 *Доступ открыт!*\n\n📁 {channel_name}\n{description or 'Премиум контент'}"
+    success_text = f"🎉 *Доступ открыт!*\n\n📁 *{channel_name}*\n{description or '🔥 Эксклюзивный контент'}\n\n💎 Приятного использования!"
     
     keyboard = [
-        [InlineKeyboardButton("🚀 Перейти", url=channel_url)],
-        [InlineKeyboardButton("🔄 Проверить", callback_data="check_subs")]
+        [InlineKeyboardButton("🚀 Перейти к контенту", url=channel_url)],
+        [InlineKeyboardButton("🔄 Проверить снова", callback_data="check_subs")]
     ]
     
     if update.effective_user.id == ADMIN_ID:
-        keyboard.append([InlineKeyboardButton("⚙️ Админ", callback_data="admin_panel")])
+        keyboard.append([InlineKeyboardButton("⚙️ Админ-панель", callback_data="admin_panel")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -359,7 +398,7 @@ async def show_subscription_request(update: Update, context: ContextTypes.DEFAUL
                 InlineKeyboardButton(f"✅ Подтвердить", callback_data=f"confirm_{channel_info['id']}")
             ])
     
-    keyboard.append([InlineKeyboardButton("🔄 Проверить", callback_data="check_subs")])
+    keyboard.append([InlineKeyboardButton("🔄 Проверить подписки", callback_data="check_subs")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -367,11 +406,12 @@ async def show_subscription_request(update: Update, context: ContextTypes.DEFAUL
         channels_list = ""
         for channel in missing_channels:
             icon = "📺" if channel["type"] == "public" else "🔒"
-            channels_list += f"{icon} {channel['name']}\n"
+            status = " (подписка)" if channel["type"] == "public" else " (подтверждение)"
+            channels_list += f"{icon} {channel['name']}{status}\n"
         
-        request_text = f"📋 *Нужно подписаться:*\n\n{channels_list}\n🔐 После подписки нажми 'Проверить'"
+        request_text = f"📋 *Требуются действия:*\n\n{channels_list}\n🔐 После выполнения нажмите 'Проверить подписки'"
     else:
-        request_text = "📋 Нужно подписаться на каналы"
+        request_text = "📋 Необходимо подписаться на каналы"
     
     if update.callback_query:
         try:
@@ -384,7 +424,7 @@ async def show_subscription_request(update: Update, context: ContextTypes.DEFAUL
 async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Админ-панель"""
     if not db:
-        error_msg = "🔴 База недоступна"
+        error_msg = "🔴 База данных недоступна"
         if update.callback_query:
             await update.callback_query.edit_message_text(error_msg)
         else:
@@ -395,11 +435,18 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sub_channels = db.get_subscription_channels()
     ref_channels = db.get_referral_channels()
     
-    admin_text = f"⚙️ *Панель управления*\n\n👥 Пользователей: {total_users}\n📊 Каналов: {len(sub_channels)}\n💎 Финальных: {len(ref_channels)}"
+    admin_text = (
+        f"⚙️ *Панель управления*\n\n"
+        f"📊 *Статистика:*\n"
+        f"• 👥 Пользователей: {total_users}\n"
+        f"• 📺 Каналов для подписки: {len(sub_channels)}\n"
+        f"• 💎 Финальных каналов: {len(ref_channels)}\n\n"
+        f"🛠 *Управление ботом*"
+    )
     
     keyboard = [
         [InlineKeyboardButton("📊 Управление каналами", callback_data="manage_channels")],
-        [InlineKeyboardButton("🔙 Назад", callback_data="check_subs")]
+        [InlineKeyboardButton("🔄 Проверить подписки", callback_data="check_subs")]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -413,29 +460,34 @@ async def show_manage_channels(update: Update, context: ContextTypes.DEFAULT_TYP
     """Управление каналами"""
     if not db:
         if update.callback_query:
-            await update.callback_query.edit_message_text("🔴 База недоступна")
+            await update.callback_query.edit_message_text("🔴 База данных недоступна")
         else:
-            await update.message.reply_text("🔴 База недоступна")
+            await update.message.reply_text("🔴 База данных недоступна")
         return
     
     sub_channels = db.get_subscription_channels()
     ref_channels = db.get_referral_channels()
     
-    text = f"📊 *Управление каналами*\n\n📺 Подписки: {len(sub_channels)}\n💎 Финальные: {len(ref_channels)}"
+    text = (
+        f"📊 *Управление каналами*\n\n"
+        f"📺 *Каналы для подписки:* {len(sub_channels)}\n"
+        f"💎 *Финальные каналы:* {len(ref_channels)}\n\n"
+        f"Выберите действие:"
+    )
     
     keyboard = [
-        [InlineKeyboardButton("➕ Публичный", callback_data="add_public_channel")],
-        [InlineKeyboardButton("➕ Приватный", callback_data="add_private_channel")],
-        [InlineKeyboardButton("💎 Финальный", callback_data="add_referral_channel")]
+        [InlineKeyboardButton("➕ Добавить публичный канал", callback_data="add_public_channel")],
+        [InlineKeyboardButton("➕ Добавить приватный канал", callback_data="add_private_channel")],
+        [InlineKeyboardButton("💎 Добавить финальный канал", callback_data="add_referral_channel")]
     ]
     
     if sub_channels:
-        keyboard.append([InlineKeyboardButton("🗑️ Удалить канал", callback_data="show_delete_sub")])
+        keyboard.append([InlineKeyboardButton("🗑️ Удалить канал подписки", callback_data="show_delete_sub")])
     
     if ref_channels:
-        keyboard.append([InlineKeyboardButton("🗑️ Удалить финальный", callback_data="show_delete_ref")])
+        keyboard.append([InlineKeyboardButton("🗑️ Удалить финальный канал", callback_data="show_delete_ref")])
     
-    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")])
+    keyboard.append([InlineKeyboardButton("🔙 Назад в админку", callback_data="admin_panel")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -451,6 +503,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     
     if query.data == "check_subs":
+        # Сбрасываем подтверждения для приватных каналов
         channels = db.get_subscription_channels()
         for channel in channels:
             channel_id, _, _, _, channel_type, _ = channel
@@ -469,7 +522,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         channel_id = int(query.data.replace("confirm_", ""))
         
         if db.confirm_subscription(user.id, channel_id):
-            await query.answer("✅ Подтверждено!", show_alert=True)
+            await query.answer("✅ Подписка подтверждена!", show_alert=True)
             subscription_status = await check_subscriptions(update, context)
             
             if subscription_status["all_subscribed"]:
@@ -477,51 +530,52 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await show_subscription_request(update, context, subscription_status["missing_channels"])
         else:
-            await query.answer("🔴 Ошибка", show_alert=True)
+            await query.answer("🔴 Ошибка подтверждения", show_alert=True)
     
     elif query.data == "admin_panel":
         if user.id == ADMIN_ID:
             await show_admin_panel(update, context)
         else:
-            await query.answer("🚫 Нет доступа", show_alert=True)
+            await query.answer("🚫 Недостаточно прав", show_alert=True)
     
     elif query.data == "manage_channels":
         if user.id == ADMIN_ID:
             await show_manage_channels(update, context)
         else:
-            await query.answer("🚫 Нет доступа", show_alert=True)
+            await query.answer("🚫 Недостаточно прав", show_alert=True)
 
 async def set_commands(application: Application):
     """Команды бота"""
     commands = [
-        BotCommand("start", "🚀 Старт"),
-        BotCommand("admin", "⚙️ Админка"),
-        BotCommand("check", "🔄 Проверить")
+        BotCommand("start", "🚀 Запустить бота"),
+        BotCommand("admin", "⚙️ Админ-панель"),
+        BotCommand("check", "🔄 Проверить подписки")
     ]
     await application.bot.set_my_commands(commands)
 
 def main():
     """Запуск бота"""
     if not db:
-        logger.error("🔴 БД не работает")
+        logger.error("🔴 База данных не инициализирована")
         return
     
     try:
         application = Application.builder().token(BOT_TOKEN).build()
         
+        # ПРАВИЛЬНЫЕ ОБРАБОТЧИКИ КОМАНД
         application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("admin", start))
-        application.add_handler(CommandHandler("check", start))
+        application.add_handler(CommandHandler("admin", admin_command))
+        application.add_handler(CommandHandler("check", check_command))
         
         application.add_handler(CallbackQueryHandler(button_handler))
         
         application.post_init = set_commands
         
-        logger.info("🤖 Бот запущен")
+        logger.info("🤖 Бот запущен и готов к работе!")
         application.run_polling()
         
     except Exception as e:
-        logger.error(f"🔴 Ошибка: {e}")
+        logger.error(f"🔴 Ошибка запуска: {e}")
 
 if __name__ == "__main__":
     main()
