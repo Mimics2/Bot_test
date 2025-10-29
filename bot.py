@@ -236,7 +236,7 @@ except Exception as e:
     db = None
 
 async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Проверка подписок - УЛУЧШЕННАЯ ВЕРСИЯ С ОБРАБОТКОЙ ОШИБОК"""
+    """Проверка подписок - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
     if not db:
         return {"all_subscribed": False, "missing_channels": []}
     
@@ -262,14 +262,14 @@ async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
                 ]
                 
                 subscribed = False
-                last_error = None
-                channel_accessible = True
+                channel_accessible = False
                 
                 for identifier in chat_identifiers:
                     try:
                         # Сначала проверяем существование чата
                         chat = await bot.get_chat(identifier)
                         logger.info(f"✅ Чат {identifier} существует: {chat.title}")
+                        channel_accessible = True
                         
                         # Затем проверяем подписку пользователя
                         chat_member = await bot.get_chat_member(identifier, user.id)
@@ -280,49 +280,63 @@ async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
                             break
                         else:
                             logger.info(f"❌ Пользователь {user.id} НЕ подписан на {channel_name}")
+                            break
                             
                     except BadRequest as e:
-                        last_error = e
                         error_message = str(e).lower()
                         
                         if "chat not found" in error_message or "channel not found" in error_message:
                             logger.warning(f"⚠️ Чат {identifier} не существует: {e}")
-                            channel_accessible = False
-                            break  # Прерываем попытки для этого канала
+                            break
                         elif "user not found" in error_message:
                             logger.warning(f"⚠️ Пользователь не найден при проверке {identifier}: {e}")
                             continue
                         elif "not enough rights" in error_message:
                             logger.warning(f"⚠️ Недостаточно прав для проверки {identifier}: {e}")
-                            channel_accessible = False
-                            break  # Прерываем попытки для этого канала
+                            break
                         else:
                             logger.warning(f"⚠️ Ошибка при проверке {identifier}: {e}")
                             continue
                             
                     except Exception as e:
-                        last_error = e
                         logger.warning(f"⚠️ Неизвестная ошибка при проверке {identifier}: {e}")
                         continue
                 
-                # Если канал не найден или нет прав - пропускаем его
-                if not channel_accessible:
-                    logger.warning(f"🚫 Пропускаем канал {channel_name} из-за ошибки доступа")
-                    continue
-                
-                if not subscribed:
+                # Если канал доступен и пользователь не подписан - добавляем в список
+                if channel_accessible and not subscribed:
                     result["all_subscribed"] = False
                     result["missing_channels"].append({
                         "id": channel_id,
                         "name": channel_name,
                         "type": "public",
-                        "url": f"https://t.me/{clean_username}"
+                        "url": f"https://t.me/{clean_username}",
+                        "accessible": True
                     })
+                elif not channel_accessible:
+                    # Если канал недоступен, считаем что пользователь не подписан
+                    result["all_subscribed"] = False
+                    result["missing_channels"].append({
+                        "id": channel_id,
+                        "name": channel_name,
+                        "type": "public", 
+                        "url": f"https://t.me/{clean_username}",
+                        "accessible": False,
+                        "error": "Канал недоступен для проверки"
+                    })
+                    logger.warning(f"🚫 Канал {channel_name} недоступен для проверки")
                     
             except Exception as e:
                 logger.error(f"🔴 Критическая ошибка проверки канала {channel_name}: {e}")
-                # Не добавляем канал в missing_channels если он недоступен
-                continue
+                # При любой ошибке считаем что пользователь не подписан
+                result["all_subscribed"] = False
+                result["missing_channels"].append({
+                    "id": channel_id,
+                    "name": channel_name,
+                    "type": "public",
+                    "url": f"https://t.me/{clean_username}",
+                    "accessible": False,
+                    "error": f"Ошибка проверки: {str(e)}"
+                })
         
         elif channel_type == 'private':
             is_confirmed = db.is_subscription_confirmed(user.id, channel_id)
@@ -333,13 +347,9 @@ async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
                     "id": channel_id,
                     "name": channel_name,
                     "type": "private", 
-                    "url": channel_url
+                    "url": channel_url,
+                    "accessible": True
                 })
-    
-    # Если все каналы недоступны, считаем что подписки пройдены
-    if not result["missing_channels"] and not result["all_subscribed"]:
-        result["all_subscribed"] = True
-        logger.info("🟢 Все доступные каналы проверены или недоступные пропущены")
     
     return result
 
@@ -433,7 +443,7 @@ async def show_success_message(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text(success_text, reply_markup=reply_markup, parse_mode='Markdown')
 
 async def show_subscription_request(update: Update, context: ContextTypes.DEFAULT_TYPE, missing_channels=None):
-    """Запрос подписки - УЛУЧШЕННАЯ ВЕРСИЯ"""
+    """Запрос подписки - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
     if not missing_channels:
         missing_channels = []
     
@@ -441,13 +451,22 @@ async def show_subscription_request(update: Update, context: ContextTypes.DEFAUL
     
     for channel_info in missing_channels:
         if channel_info["type"] == "public":
-            # Для публичных каналов всегда показываем кнопку подписки
-            keyboard.append([
-                InlineKeyboardButton(
-                    f"📺 Подписаться: {channel_info['name']}",
-                    url=channel_info["url"]
-                )
-            ])
+            if not channel_info.get("accessible", True):
+                # Для недоступных каналов показываем сообщение об ошибке
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"⚠️ {channel_info['name']} (ошибка проверки)",
+                        callback_data="unavailable_channel"
+                    )
+                ])
+            else:
+                # Для доступных публичных каналов показываем кнопку подписки
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"📺 Подписаться: {channel_info['name']}",
+                        url=channel_info["url"]
+                    )
+                ])
         elif channel_info["type"] == "private":
             keyboard.append([
                 InlineKeyboardButton(f"🔗 {channel_info['name']}", url=channel_info["url"]),
@@ -461,11 +480,20 @@ async def show_subscription_request(update: Update, context: ContextTypes.DEFAUL
     if missing_channels:
         channels_list = ""
         for channel in missing_channels:
-            icon = "📺" if channel["type"] == "public" else "🔒"
-            status = " (подписка)" if channel["type"] == "public" else " (подтверждение)"
-            channels_list += f"{icon} {channel['name']}{status}\n"
+            if channel.get("accessible", True):
+                icon = "📺" if channel["type"] == "public" else "🔒"
+                status = " (подписка)" if channel["type"] == "public" else " (подтверждение)"
+                channels_list += f"{icon} {channel['name']}{status}\n"
+            else:
+                channels_list += f"⚠️ {channel['name']} (ошибка проверки)\n"
         
         request_text = f"📋 *Требуются действия:*\n\n{channels_list}\n🔐 После выполнения нажмите 'Проверить подписки'"
+        
+        # Добавляем предупреждение для админа о проблемных каналах
+        if update.effective_user.id == ADMIN_ID:
+            problematic_channels = [ch for ch in missing_channels if not ch.get("accessible", True)]
+            if problematic_channels:
+                request_text += f"\n\n⚡️ *Админу:* {len(problematic_channels)} каналов недоступны для проверки"
     else:
         request_text = "✅ Все проверки пройдены! Доступ открыт."
     
@@ -606,7 +634,7 @@ async def show_delete_referral_channels(update: Update, context: ContextTypes.DE
     await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик кнопок - УЛУЧШЕННАЯ ВЕРСИЯ"""
+    """Обработчик кнопок"""
     query = update.callback_query
     await query.answer()
     user = update.effective_user
@@ -730,6 +758,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         else:
             await query.answer("🚫 Недостаточно прав", show_alert=True)
+    
+    elif query.data == "unavailable_channel":
+        await query.answer("⚠️ Этот канал недоступен для проверки. Обратитесь к администратору.", show_alert=True)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик сообщений для добавления каналов"""
