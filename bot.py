@@ -294,7 +294,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db.add_user(user.id, user.username, user.full_name)
     
-    # УЛУЧШЕННОЕ ПРИВЕТСТВИЕ ДЛЯ ПРОДАЖ
     welcome_text = (
         "🎉 *Добро пожаловать!*\n\n"
         "🤖 *Premium Subscription Bot* - ваш надежный помощник для управления доступом к эксклюзивному контенту\n\n"
@@ -496,14 +495,66 @@ async def show_manage_channels(update: Update, context: ContextTypes.DEFAULT_TYP
     else:
         await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
 
+async def show_delete_subscription_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показ каналов для удаления"""
+    if not db:
+        await update.callback_query.edit_message_text("🔴 База данных недоступна")
+        return
+    
+    channels = db.get_subscription_channels()
+    
+    if not channels:
+        await update.callback_query.edit_message_text("🔴 Нет каналов для удаления")
+        return
+    
+    text = "🗑️ *Выберите канал для удаления:*\n\n"
+    
+    keyboard = []
+    for channel in channels:
+        channel_id, _, _, channel_name, channel_type, _ = channel
+        type_icon = "🔓" if channel_type == 'public' else "🔒"
+        keyboard.append([
+            InlineKeyboardButton(f"{type_icon} {channel_name}", callback_data=f"delete_sub_{channel_id}")
+        ])
+    
+    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="manage_channels")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+
+async def show_delete_referral_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показ финальных каналов для удаления"""
+    if not db:
+        await update.callback_query.edit_message_text("🔴 База данных недоступна")
+        return
+    
+    channels = db.get_referral_channels()
+    
+    if not channels:
+        await update.callback_query.edit_message_text("🔴 Нет финальных каналов для удаления")
+        return
+    
+    text = "🗑️ *Выберите финальный канал для удаления:*\n\n"
+    
+    keyboard = []
+    for channel in channels:
+        channel_id, _, channel_name, _, _ = channel
+        keyboard.append([
+            InlineKeyboardButton(f"💎 {channel_name}", callback_data=f"delete_ref_{channel_id}")
+        ])
+    
+    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="manage_channels")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик кнопок"""
+    """Обработчик кнопок - ИСПРАВЛЕННЫЙ"""
     query = update.callback_query
     await query.answer()
     user = update.effective_user
     
     if query.data == "check_subs":
-        # Сбрасываем подтверждения для приватных каналов
         channels = db.get_subscription_channels()
         for channel in channels:
             channel_id, _, _, _, channel_type, _ = channel
@@ -543,6 +594,150 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await show_manage_channels(update, context)
         else:
             await query.answer("🚫 Недостаточно прав", show_alert=True)
+    
+    elif query.data == "show_delete_sub":
+        if user.id == ADMIN_ID:
+            await show_delete_subscription_channels(update, context)
+        else:
+            await query.answer("🚫 Недостаточно прав", show_alert=True)
+    
+    elif query.data == "show_delete_ref":
+        if user.id == ADMIN_ID:
+            await show_delete_referral_channels(update, context)
+        else:
+            await query.answer("🚫 Недостаточно прав", show_alert=True)
+    
+    elif query.data.startswith("delete_sub_"):
+        if user.id == ADMIN_ID:
+            channel_id = int(query.data.replace("delete_sub_", ""))
+            if db.remove_subscription_channel(channel_id):
+                await query.answer("✅ Канал удален", show_alert=True)
+                await show_manage_channels(update, context)
+            else:
+                await query.answer("🔴 Ошибка удаления", show_alert=True)
+        else:
+            await query.answer("🚫 Недостаточно прав", show_alert=True)
+    
+    elif query.data.startswith("delete_ref_"):
+        if user.id == ADMIN_ID:
+            channel_id = int(query.data.replace("delete_ref_", ""))
+            if db.remove_referral_channel(channel_id):
+                await query.answer("✅ Канал удален", show_alert=True)
+                await show_manage_channels(update, context)
+            else:
+                await query.answer("🔴 Ошибка удаления", show_alert=True)
+        else:
+            await query.answer("🚫 Недостаточно прав", show_alert=True)
+    
+    # ДОБАВЛЕНИЕ КАНАЛОВ - ИСПРАВЛЕНО
+    elif query.data == "add_public_channel":
+        if user.id == ADMIN_ID:
+            context.user_data['awaiting_channel'] = True
+            context.user_data['channel_type'] = 'public'
+            await query.edit_message_text(
+                "➕ *Добавление публичного канала*\n\n"
+                "Введите данные в формате:\n"
+                "`@username Название_канала`\n\n"
+                "📝 *Пример:*\n"
+                "`@my_channel Мой Канал`"
+            )
+        else:
+            await query.answer("🚫 Недостаточно прав", show_alert=True)
+    
+    elif query.data == "add_private_channel":
+        if user.id == ADMIN_ID:
+            context.user_data['awaiting_channel'] = True
+            context.user_data['channel_type'] = 'private'
+            await query.edit_message_text(
+                "➕ *Добавление приватного канала*\n\n"
+                "⚠️ *ВАЖНО:* Бот не может проверить подписку на приватные каналы!\n\n"
+                "Введите данные в формате:\n"
+                "`ссылка Название_канала`\n\n"
+                "📝 *Пример:*\n"
+                "`https://t.me/private_channel Приватный Канал`"
+            )
+        else:
+            await query.answer("🚫 Недостаточно прав", show_alert=True)
+    
+    elif query.data == "add_referral_channel":
+        if user.id == ADMIN_ID:
+            context.user_data['awaiting_channel'] = True
+            context.user_data['channel_type'] = 'referral'
+            await query.edit_message_text(
+                "💎 *Добавление финального канала*\n\n"
+                "Введите данные в формате:\n"
+                "`ссылка Название Описание`\n\n"
+                "📝 *Пример:*\n"
+                "`https://t.me/premium Премиум Эксклюзивный контент`"
+            )
+        else:
+            await query.answer("🚫 Недостаточно прав", show_alert=True)
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик сообщений для добавления каналов - ИСПРАВЛЕННЫЙ"""
+    if update.effective_user.id != ADMIN_ID:
+        return
+    
+    if context.user_data.get('awaiting_channel'):
+        channel_type = context.user_data.get('channel_type')
+        text = update.message.text.strip()
+        
+        try:
+            if channel_type == 'public':
+                parts = text.split(' ', 1)
+                if len(parts) == 2 and parts[0].startswith('@'):
+                    username = parts[0]
+                    name = parts[1]
+                    url = f"https://t.me/{username.lstrip('@')}"
+                    
+                    if db.add_subscription_channel(username, url, name, 'public'):
+                        await update.message.reply_text(f"✅ *Публичный канал добавлен!*\n\n📺 {name}")
+                        await show_manage_channels(update, context)
+                    else:
+                        await update.message.reply_text("🔴 Ошибка при добавлении канала")
+                else:
+                    await update.message.reply_text("❌ Неверный формат. Используйте: @username Название")
+            
+            elif channel_type == 'private':
+                parts = text.split(' ', 1)
+                if len(parts) == 2:
+                    url = parts[0]
+                    name = parts[1]
+                    
+                    if db.add_subscription_channel(None, url, name, 'private'):
+                        await update.message.reply_text(
+                            f"✅ *Приватный канал добавлен!*\n\n"
+                            f"🔒 {name}\n"
+                            f"⚠️ Пользователи будут подтверждать подписку вручную"
+                        )
+                        await show_manage_channels(update, context)
+                    else:
+                        await update.message.reply_text("🔴 Ошибка при добавлении канала")
+                else:
+                    await update.message.reply_text("❌ Неверный формат. Используйте: ссылка Название")
+            
+            elif channel_type == 'referral':
+                parts = text.split(' ', 2)
+                if len(parts) >= 2:
+                    url = parts[0]
+                    name = parts[1]
+                    description = parts[2] if len(parts) > 2 else "🔥 Эксклюзивный контент"
+                    
+                    if db.add_referral_channel(url, name, description):
+                        await update.message.reply_text(f"💎 *Финальный канал добавлен!*\n\n📁 {name}")
+                        await show_manage_channels(update, context)
+                    else:
+                        await update.message.reply_text("🔴 Ошибка при добавлении канала")
+                else:
+                    await update.message.reply_text("❌ Неверный формат. Используйте: ссылка Название [Описание]")
+            
+            # Сбрасываем флаг ожидания
+            context.user_data['awaiting_channel'] = False
+            
+        except Exception as e:
+            logger.error(f"🔴 Ошибка обработки сообщения: {e}")
+            await update.message.reply_text("🔴 Ошибка при обработке запроса")
+            context.user_data['awaiting_channel'] = False
 
 async def set_commands(application: Application):
     """Команды бота"""
@@ -562,12 +757,16 @@ def main():
     try:
         application = Application.builder().token(BOT_TOKEN).build()
         
-        # ПРАВИЛЬНЫЕ ОБРАБОТЧИКИ КОМАНД
+        # Обработчики команд
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("admin", admin_command))
         application.add_handler(CommandHandler("check", check_command))
         
+        # Обработчики кнопок
         application.add_handler(CallbackQueryHandler(button_handler))
+        
+        # Обработчик текстовых сообщений (для добавления каналов)
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         
         application.post_init = set_commands
         
