@@ -286,7 +286,7 @@ async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
     return result
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Старт бота - улучшенное приветствие"""
+    """Старт бота - универсальное приветствие"""
     if not db:
         await update.message.reply_text("🔧 Технические работы... Попробуйте позже")
         return
@@ -294,15 +294,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db.add_user(user.id, user.username, user.full_name)
     
+    # УНИВЕРСАЛЬНОЕ ПРИВЕТСТВИЕ ДЛЯ ВСЕХ ПОЛЬЗОВАТЕЛЕЙ
     welcome_text = (
         "🎉 *Добро пожаловать!*\n\n"
-        "🤖 *Premium Subscription Bot* - ваш надежный помощник для управления доступом к эксклюзивному контенту\n\n"
-        "✨ *Возможности:*\n"
-        "• ✅ Автопроверка подписок\n"
-        "• 🔒 Защита приватных каналов\n"
-        "• 📊 Удобная админ-панель\n"
-        "• 💰 Монетизация контента\n\n"
-        "🚀 *Готов к использованию!* Просто добавьте каналы через админ-панель и начните зарабатывать!\n\n"
+        "🤖 *Subscription Checker Bot*\n\n"
+        "📋 *Что я умею:*\n"
+        "• ✅ Проверять подписки на каналы\n"
+        "• 🔓 Открывать доступ к контенту\n"
+        "• 🚀 Быстро и удобно работать\n\n"
         "⚡️ Проверяю ваши подписки..."
     )
     
@@ -549,7 +548,7 @@ async def show_delete_referral_channels(update: Update, context: ContextTypes.DE
     await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик кнопок - ИСПРАВЛЕННЫЙ"""
+    """Обработчик кнопок"""
     query = update.callback_query
     await query.answer()
     user = update.effective_user
@@ -629,7 +628,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.answer("🚫 Недостаточно прав", show_alert=True)
     
-    # ДОБАВЛЕНИЕ КАНАЛОВ - ИСПРАВЛЕНО
     elif query.data == "add_public_channel":
         if user.id == ADMIN_ID:
             context.user_data['awaiting_channel'] = True
@@ -674,7 +672,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("🚫 Недостаточно прав", show_alert=True)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик сообщений для добавления каналов - ИСПРАВЛЕННЫЙ"""
+    """Обработчик сообщений для добавления каналов"""
     if update.effective_user.id != ADMIN_ID:
         return
     
