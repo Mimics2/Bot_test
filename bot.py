@@ -237,7 +237,7 @@ except Exception as e:
     db = None
 
 async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Проверка подписок - ПОЛНОСТЬЮ ПЕРЕРАБОТАННАЯ ВЕРСИЯ"""
+    """Проверка подписок - ИСПРАВЛЕННАЯ ЛОГИКА ДЛЯ КАНАЛОВ"""
     if not db:
         return {"all_subscribed": False, "missing_channels": []}
     
@@ -253,7 +253,7 @@ async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
         if channel_type == 'public' and channel_username:
             try:
                 clean_username = channel_username.lstrip('@')
-                logger.info(f"🔍 Проверяю канал @{clean_username} для пользователя {user.id}")
+                logger.info(f"🔍 Проверяю КАНАЛ @{clean_username} для пользователя {user.id}")
                 
                 # Очищаем username от лишних символов
                 clean_username = re.sub(r'[^a-zA-Z0-9_]', '', clean_username)
@@ -276,55 +276,74 @@ async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
                 last_error = None
                 
                 try:
-                    # Пытаемся получить чат по username
+                    # Пытаемся получить КАНАЛ по username
                     chat = await bot.get_chat(f"@{clean_username}")
-                    channel_accessible = True
-                    logger.info(f"✅ Чат доступен: {chat.title}")
                     
-                    # Проверяем подписку пользователя
-                    try:
-                        chat_member = await bot.get_chat_member(chat.id, user.id)
-                        status = chat_member.status
-                        subscribed = status in ['member', 'administrator', 'creator', 'restricted']
+                    # Проверяем, что это действительно канал, а не чат
+                    if chat.type in ['channel', 'supergroup']:
+                        channel_accessible = True
+                        logger.info(f"✅ КАНАЛ найден: {chat.title} (тип: {chat.type})")
                         
-                        logger.info(f"📊 Статус пользователя {user.id} в канале {channel_name}: {status}")
-                        
-                        if not subscribed:
-                            logger.info(f"❌ Пользователь {user.id} НЕ подписан на {channel_name}")
-                        else:
-                            logger.info(f"✅ Пользователь {user.id} подписан на {channel_name}")
+                        # Проверяем подписку пользователя на КАНАЛ
+                        try:
+                            chat_member = await bot.get_chat_member(chat.id, user.id)
+                            status = chat_member.status
+                            # Для каналов статусы: 'member', 'administrator', 'creator', 'left', 'kicked', 'restricted'
+                            subscribed = status in ['member', 'administrator', 'creator']
                             
-                    except BadRequest as e:
-                        error_msg = str(e).lower()
-                        if "user not found" in error_msg or "user not participant" in error_msg:
-                            logger.info(f"❌ Пользователь {user.id} не найден в канале {channel_name}")
-                            subscribed = False
-                        else:
-                            logger.error(f"🔴 Ошибка проверки подписки: {e}")
+                            logger.info(f"📊 Статус пользователя {user.id} в КАНАЛЕ {channel_name}: {status}")
+                            
+                            if not subscribed:
+                                logger.info(f"❌ Пользователь {user.id} НЕ подписан на КАНАЛ {channel_name}")
+                            else:
+                                logger.info(f"✅ Пользователь {user.id} подписан на КАНАЛ {channel_name}")
+                                
+                        except BadRequest as e:
+                            error_msg = str(e).lower()
+                            if "user not found" in error_msg or "user not participant" in error_msg:
+                                logger.info(f"❌ Пользователь {user.id} не найден в КАНАЛЕ {channel_name}")
+                                subscribed = False
+                            elif "chat not found" in error_msg:
+                                logger.error(f"❌ КАНАЛ не найден: @{clean_username}")
+                                channel_accessible = False
+                            else:
+                                logger.error(f"🔴 Ошибка проверки подписки на КАНАЛ: {e}")
+                                last_error = e
+                                subscribed = False
+                        except Forbidden as e:
+                            logger.error(f"🚫 Нет доступа к КАНАЛУ @{clean_username}: {e}")
+                            channel_accessible = False
                             last_error = e
-                            subscribed = False
                     
+                    else:
+                        logger.error(f"❌ Это не канал, а {chat.type}: @{clean_username}")
+                        channel_accessible = False
+                        last_error = f"Объект не является каналом (тип: {chat.type})"
+                        
                 except BadRequest as e:
                     error_msg = str(e).lower()
                     last_error = e
                     
                     if "chat not found" in error_msg:
-                        logger.error(f"❌ Чат @{clean_username} не существует")
+                        logger.error(f"❌ КАНАЛ @{clean_username} не существует")
                         channel_accessible = False
                     elif "not enough rights" in error_msg:
-                        logger.error(f"🔐 Недостаточно прав для проверки канала @{clean_username}")
+                        logger.error(f"🔐 Недостаточно прав для проверки КАНАЛА @{clean_username}")
+                        channel_accessible = False
+                    elif "channel not found" in error_msg:
+                        logger.error(f"❌ КАНАЛ @{clean_username} не найден")
                         channel_accessible = False
                     else:
                         logger.error(f"🔴 Неизвестная ошибка BadRequest: {e}")
                         channel_accessible = False
                         
                 except Forbidden as e:
-                    logger.error(f"🚫 Доступ к каналу @{clean_username} запрещен")
+                    logger.error(f"🚫 Доступ к КАНАЛУ @{clean_username} запрещен")
                     channel_accessible = False
                     last_error = e
                     
                 except Exception as e:
-                    logger.error(f"🔴 Неизвестная ошибка при проверке канала: {e}")
+                    logger.error(f"🔴 Неизвестная ошибка при проверке КАНАЛА: {e}")
                     channel_accessible = False
                     last_error = e
                 
@@ -344,10 +363,13 @@ async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
                     result["all_subscribed"] = False
                     error_msg = "Канал недоступен"
                     if last_error:
-                        if "chat not found" in str(last_error).lower():
+                        error_str = str(last_error).lower()
+                        if "chat not found" in error_str or "channel not found" in error_str:
                             error_msg = "Канал не существует"
-                        elif "not enough rights" in str(last_error).lower():
-                            error_msg = "Бот не имеет прав для проверки"
+                        elif "not enough rights" in error_str:
+                            error_msg = "Бот не имеет прав для проверки канала"
+                        elif "forbidden" in error_str:
+                            error_msg = "Доступ к каналу запрещен"
                     
                     result["missing_channels"].append({
                         "id": channel_id,
@@ -357,10 +379,10 @@ async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
                         "accessible": False,
                         "error": error_msg
                     })
-                    logger.warning(f"🚫 Канал {channel_name} недоступен: {error_msg}")
+                    logger.warning(f"🚫 КАНАЛ {channel_name} недоступен: {error_msg}")
                     
             except Exception as e:
-                logger.error(f"🔴 Критическая ошибка проверки канала {channel_name}: {e}")
+                logger.error(f"🔴 Критическая ошибка проверки КАНАЛА {channel_name}: {e}")
                 result["all_subscribed"] = False
                 result["missing_channels"].append({
                     "id": channel_id,
@@ -423,7 +445,7 @@ async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db.add_user(user.id, user.username, user.full_name)
     
-    await update.message.reply_text("🔄 Проверяю подписки...")
+    await update.message.reply_text("🔄 Проверяю подписки на каналы...")
     
     subscription_status = await check_subscriptions(update, context)
     
@@ -476,7 +498,7 @@ async def show_success_message(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text(success_text, reply_markup=reply_markup, parse_mode='Markdown')
 
 async def show_subscription_request(update: Update, context: ContextTypes.DEFAULT_TYPE, missing_channels=None):
-    """Запрос подписки"""
+    """Запрос подписки на каналы"""
     if not missing_channels:
         missing_channels = []
     
@@ -521,7 +543,7 @@ async def show_subscription_request(update: Update, context: ContextTypes.DEFAUL
         for channel in missing_channels:
             if channel.get("accessible", True):
                 icon = "📺" if channel["type"] == "public" else "🔒"
-                status = " (подписка)" if channel["type"] == "public" else " (подтверждение)"
+                status = " (подписка на канал)" if channel["type"] == "public" else " (подтверждение)"
                 channels_list += f"{icon} {channel['name']}{status}\n"
             else:
                 channels_list += f"⚠️ {channel['name']} ({channel.get('error', 'ошибка проверки')})\n"
@@ -681,7 +703,7 @@ async def check_channel_settings(update: Update, context: ContextTypes.DEFAULT_T
     channels = db.get_subscription_channels()
     bot = context.bot
     
-    check_results = "🔧 *Проверка настроек каналов:*\n\n"
+    check_results = "🔧 *Проверка настроек КАНАЛОВ:*\n\n"
     
     for channel in channels:
         channel_id, channel_username, channel_url, channel_name, channel_type, _ = channel
@@ -693,35 +715,49 @@ async def check_channel_settings(update: Update, context: ContextTypes.DEFAULT_T
             try:
                 # Пытаемся получить информацию о канале
                 chat = await bot.get_chat(f"@{clean_username}")
-                check_results += "   ✅ Канал существует\n"
                 
-                # Проверяем права бота
-                try:
-                    bot_member = await bot.get_chat_member(chat.id, bot.id)
-                    if bot_member.status in ['administrator', 'creator']:
-                        check_results += "   ✅ Бот - администратор\n"
-                        
-                        # Проверяем конкретные права
-                        if hasattr(bot_member, 'can_restrict_members') and bot_member.can_restrict_members:
-                            check_results += "   ✅ Есть права на управление участниками\n"
-                        else:
-                            check_results += "   ⚠️ Нет прав на управление участниками\n"
+                # Проверяем тип объекта
+                if chat.type in ['channel', 'supergroup']:
+                    check_results += f"   ✅ Это КАНАЛ (тип: {chat.type})\n"
+                    
+                    # Проверяем права бота
+                    try:
+                        bot_member = await bot.get_chat_member(chat.id, bot.id)
+                        if bot_member.status in ['administrator', 'creator']:
+                            check_results += "   ✅ Бот - администратор канала\n"
                             
-                        if hasattr(bot_member, 'can_invite_users') and bot_member.can_invite_users:
-                            check_results += "   ✅ Есть права на приглашение\n"
+                            # Проверяем конкретные права
+                            if hasattr(bot_member, 'can_restrict_members') and bot_member.can_restrict_members:
+                                check_results += "   ✅ Есть права на управление участниками\n"
+                            else:
+                                check_results += "   ⚠️ Нет прав на управление участниками\n"
+                                
+                            if hasattr(bot_member, 'can_invite_users') and bot_member.can_invite_users:
+                                check_results += "   ✅ Есть права на приглашение\n"
+                            else:
+                                check_results += "   ⚠️ Нет прав на приглашение\n"
+                                
+                            # Самое важное право для проверки подписок
+                            if hasattr(bot_member, 'can_restrict_members'):
+                                check_results += "   ✅ Может проверять подписки (can_restrict_members)\n"
+                            else:
+                                check_results += "   ❌ НЕ может проверять подписки\n"
                         else:
-                            check_results += "   ⚠️ Нет прав на приглашение\n"
-                    else:
-                        check_results += "   ❌ Бот НЕ администратор\n"
+                            check_results += "   ❌ Бот НЕ администратор канала\n"
+                            
+                    except Exception as e:
+                        check_results += f"   ❌ Ошибка проверки прав: {e}\n"
                         
-                except Exception as e:
-                    check_results += f"   ❌ Ошибка проверки прав: {e}\n"
+                else:
+                    check_results += f"   ❌ Это НЕ канал, а {chat.type}\n"
                     
             except BadRequest as e:
                 if "chat not found" in str(e).lower():
                     check_results += "   ❌ Канал не существует\n"
                 elif "not enough rights" in str(e).lower():
                     check_results += "   ❌ Нет доступа к каналу\n"
+                elif "channel not found" in str(e).lower():
+                    check_results += "   ❌ Канал не найден\n"
                 else:
                     check_results += f"   ❌ Ошибка: {e}\n"
             except Exception as e:
@@ -729,10 +765,11 @@ async def check_channel_settings(update: Update, context: ContextTypes.DEFAULT_T
             
             check_results += "\n"
     
-    check_results += "💡 *Рекомендации:*\n"
-    check_results += "• Убедитесь, что бот добавлен как администратор\n"
-    check_results += "• Дайте боту права 'Просмотр участников'\n"
+    check_results += "💡 *Рекомендации для КАНАЛОВ:*\n"
+    check_results += "• Убедитесь, что бот добавлен как администратор КАНАЛА\n"
+    check_results += "• Дайте боту права 'Просмотр участников' (can_restrict_members)\n"
     check_results += "• Проверьте username канала в настройках бота\n"
+    check_results += "• Убедитесь, что это публичный КАНАЛ, а не чат\n"
     
     keyboard = [
         [InlineKeyboardButton("🔄 Проверить подписки", callback_data="check_subs")],
@@ -831,12 +868,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['awaiting_channel'] = True
             context.user_data['channel_type'] = 'public'
             await query.edit_message_text(
-                "➕ *Добавление публичного канала*\n\n"
-                "📝 *ВАЖНО:* Бот должен быть администратором в канале!\n\n"
+                "➕ *Добавление публичного КАНАЛА*\n\n"
+                "📝 *ВАЖНО:* Бот должен быть администратором в КАНАЛЕ!\n\n"
                 "Введите данные в формате:\n"
                 "`@username Название_канала`\n\n"
                 "📋 *Пример:*\n"
-                "`@my_channel Мой Канал`"
+                "`@my_channel Мой Канал`\n\n"
+                "⚠️ Убедитесь, что это КАНАЛ, а не чат!"
             )
         else:
             await query.answer("🚫 Недостаточно прав", show_alert=True)
@@ -846,8 +884,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['awaiting_channel'] = True
             context.user_data['channel_type'] = 'private'
             await query.edit_message_text(
-                "➕ *Добавление приватного канала*\n\n"
-                "⚠️ *ВАЖНО:* Бот не может проверить подписку на приватные каналы!\n\n"
+                "➕ *Добавление приватного КАНАЛА*\n\n"
+                "⚠️ *ВАЖНО:* Бот не может проверить подписку на приватные КАНАЛЫ!\n\n"
                 "Введите данные в формате:\n"
                 "`ссылка Название_канала`\n\n"
                 "📋 *Пример:*\n"
@@ -861,7 +899,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['awaiting_channel'] = True
             context.user_data['channel_type'] = 'referral'
             await query.edit_message_text(
-                "💎 *Добавление финального канала*\n\n"
+                "💎 *Добавление финального КАНАЛА*\n\n"
                 "Введите данные в формате:\n"
                 "`ссылка Название Описание`\n\n"
                 "📋 *Пример:*\n"
@@ -872,11 +910,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     elif query.data == "channel_check_error":
         await query.answer(
-            "⚠️ Проблема с проверкой этого канала. "
+            "⚠️ Проблема с проверкой этого КАНАЛА. "
             "Убедитесь, что:\n"
+            "• Это КАНАЛ, а не чат\n"
             "• Канал существует\n"
-            "• Бот - администратор канала\n"
-            "• У бота есть права на просмотр участников", 
+            "• Бот - администратор КАНАЛА\n"
+            "• У бота есть права 'Просмотр участников'", 
             show_alert=True
         )
     
@@ -905,10 +944,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                     if db.add_subscription_channel(username, url, name, 'public'):
                         await update.message.reply_text(
-                            f"✅ *Публичный канал добавлен!*\n\n"
+                            f"✅ *Публичный КАНАЛ добавлен!*\n\n"
                             f"📺 {name}\n"
                             f"🔗 {url}\n\n"
-                            f"⚠️ *Не забудьте:* Добавить бота как администратора в канал!"
+                            f"⚠️ *Не забудьте:*\n"
+                            f"• Добавить бота как администратора в КАНАЛ\n"
+                            f"• Дать права 'Просмотр участников'\n"
+                            f"• Убедиться, что это КАНАЛ, а не чат!"
                         )
                         await show_manage_channels(update, context)
                     else:
@@ -924,7 +966,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                     if db.add_subscription_channel(None, url, name, 'private'):
                         await update.message.reply_text(
-                            f"✅ *Приватный канал добавлен!*\n\n"
+                            f"✅ *Приватный КАНАЛ добавлен!*\n\n"
                             f"🔒 {name}\n"
                             f"🔗 {url}\n\n"
                             f"⚠️ Пользователи будут подтверждать подписку вручную"
@@ -943,7 +985,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     description = parts[2] if len(parts) > 2 else "🔥 Эксклюзивный контент"
                     
                     if db.add_referral_channel(url, name, description):
-                        await update.message.reply_text(f"💎 *Финальный канал добавлен!*\n\n📁 {name}\n🔗 {url}")
+                        await update.message.reply_text(f"💎 *Финальный КАНАЛ добавлен!*\n\n📁 {name}\n🔗 {url}")
                         await show_manage_channels(update, context)
                     else:
                         await update.message.reply_text("🔴 Ошибка при добавлении канала")
