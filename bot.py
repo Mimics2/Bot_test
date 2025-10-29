@@ -6,17 +6,49 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 from datetime import datetime
 
 # === НАСТРОЙКИ ===
+# Способ 1: Переменные окружения
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
+
+# Способ 2: Прямое указание токена (раскомментируйте и вставьте свой токен)
+# BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
+
+# Способ 3: Чтение из файла
+try:
+    with open("token.txt", "r") as f:
+        BOT_TOKEN = f.read().strip()
+except FileNotFoundError:
+    pass
+
+# Аналогично для ADMIN_ID
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
+
+# Способ 2: Прямое указание ADMIN_ID
+# ADMIN_ID = 123456789  # Замените на ваш Telegram ID
+
+# Способ 3: Чтение из файла
+try:
+    with open("admin_id.txt", "r") as f:
+        ADMIN_ID = int(f.read().strip())
+except FileNotFoundError:
+    pass
+
 DB_PATH = "/tmp/bot.db"
 
 # Проверка переменных
-if not BOT_TOKEN:
+if not BOT_TOKEN or BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
     logging.error("❌ BOT_TOKEN не найден!")
+    logging.error("Доступные способы установки токена:")
+    logging.error("1. Установите переменную окружения BOT_TOKEN")
+    logging.error("2. Раскомментируйте строку с BOT_TOKEN в коде")
+    logging.error("3. Создайте файл token.txt с токеном")
     exit(1)
 
 if ADMIN_ID == 0:
     logging.error("❌ ADMIN_ID не настроен!")
+    logging.error("Доступные способы установки ADMIN_ID:")
+    logging.error("1. Установите переменную окружения ADMIN_ID")
+    logging.error("2. Раскомментируйте строку с ADMIN_ID в коде") 
+    logging.error("3. Создайте файл admin_id.txt с вашим Telegram ID")
     exit(1)
 
 # Настройка логирования
