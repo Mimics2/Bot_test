@@ -4,6 +4,7 @@ import os
 import sys
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
+from telegram.error import BadRequest
 
 # Импортируем конфигурацию
 try:
@@ -235,7 +236,7 @@ except Exception as e:
     db = None
 
 async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Проверка подписок"""
+    """Проверка подписок - УЛУЧШЕННАЯ ВЕРСИЯ"""
     if not db:
         return {"all_subscribed": False, "missing_channels": []}
     
@@ -251,8 +252,33 @@ async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
         if channel_type == 'public' and channel_username:
             try:
                 clean_username = channel_username.lstrip('@')
-                chat_member = await bot.get_chat_member(f"@{clean_username}", user.id)
-                subscribed = chat_member.status in ['member', 'administrator', 'creator']
+                logger.info(f"🔍 Проверяю канал @{clean_username} для пользователя {user.id}")
+                
+                # Пробуем несколько способов обращения к каналу
+                chat_identifiers = [
+                    f"@{clean_username}",
+                    clean_username,
+                    channel_url.replace("https://t.me/", "")
+                ]
+                
+                subscribed = False
+                last_error = None
+                
+                for identifier in chat_identifiers:
+                    try:
+                        chat_member = await bot.get_chat_member(identifier, user.id)
+                        subscribed = chat_member.status in ['member', 'administrator', 'creator']
+                        if subscribed:
+                            logger.info(f"✅ Пользователь {user.id} подписан на {channel_name} через {identifier}")
+                            break
+                    except BadRequest as e:
+                        last_error = e
+                        logger.warning(f"⚠️ Не удалось проверить через {identifier}: {e}")
+                        continue
+                    except Exception as e:
+                        last_error = e
+                        logger.warning(f"⚠️ Ошибка при проверке через {identifier}: {e}")
+                        continue
                 
                 if not subscribed:
                     result["all_subscribed"] = False
@@ -262,13 +288,17 @@ async def check_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE
                         "type": "public",
                         "url": f"https://t.me/{clean_username}"
                     })
+                    logger.info(f"❌ Пользователь {user.id} не подписан на {channel_name}")
+                    
             except Exception as e:
+                logger.error(f"🔴 Критическая ошибка проверки канала {channel_name}: {e}")
                 result["all_subscribed"] = False
                 result["missing_channels"].append({
                     "id": channel_id,
                     "name": channel_name,
                     "type": "public",
-                    "url": f"https://t.me/{clean_username}"
+                    "url": f"https://t.me/{clean_username}",
+                    "error": "Ошибка проверки"
                 })
         
         elif channel_type == 'private':
@@ -294,7 +324,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db.add_user(user.id, user.username, user.full_name)
     
-    # УНИВЕРСАЛЬНОЕ ПРИВЕТСТВИЕ ДЛЯ ВСЕХ ПОЛЬЗОВАТЕЛЕЙ
     welcome_text = (
         "🎉 *Добро пожаловать!*\n\n"
         "🤖 *Subscription Checker Bot*\n\n"
@@ -384,12 +413,20 @@ async def show_subscription_request(update: Update, context: ContextTypes.DEFAUL
     
     for channel_info in missing_channels:
         if channel_info["type"] == "public":
-            keyboard.append([
-                InlineKeyboardButton(
-                    f"📺 Подписаться: {channel_info['name']}",
-                    url=channel_info["url"]
-                )
-            ])
+            if channel_info.get("error"):
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"⚠️ {channel_info['name']} (ошибка проверки)",
+                        url=channel_info["url"]
+                    )
+                ])
+            else:
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"📺 Подписаться: {channel_info['name']}",
+                        url=channel_info["url"]
+                    )
+                ])
         elif channel_info["type"] == "private":
             keyboard.append([
                 InlineKeyboardButton(f"🔗 {channel_info['name']}", url=channel_info["url"]),
@@ -403,9 +440,12 @@ async def show_subscription_request(update: Update, context: ContextTypes.DEFAUL
     if missing_channels:
         channels_list = ""
         for channel in missing_channels:
-            icon = "📺" if channel["type"] == "public" else "🔒"
-            status = " (подписка)" if channel["type"] == "public" else " (подтверждение)"
-            channels_list += f"{icon} {channel['name']}{status}\n"
+            if channel.get("error"):
+                channels_list += f"⚠️ {channel['name']} (ошибка проверки)\n"
+            else:
+                icon = "📺" if channel["type"] == "public" else "🔒"
+                status = " (подписка)" if channel["type"] == "public" else " (подтверждение)"
+                channels_list += f"{icon} {channel['name']}{status}\n"
         
         request_text = f"📋 *Требуются действия:*\n\n{channels_list}\n🔐 После выполнения нажмите 'Проверить подписки'"
     else:
@@ -634,9 +674,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['channel_type'] = 'public'
             await query.edit_message_text(
                 "➕ *Добавление публичного канала*\n\n"
+                "📝 *ВАЖНО:* Бот должен быть администратором в канале!\n\n"
                 "Введите данные в формате:\n"
                 "`@username Название_канала`\n\n"
-                "📝 *Пример:*\n"
+                "📋 *Пример:*\n"
                 "`@my_channel Мой Канал`"
             )
         else:
@@ -651,7 +692,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "⚠️ *ВАЖНО:* Бот не может проверить подписку на приватные каналы!\n\n"
                 "Введите данные в формате:\n"
                 "`ссылка Название_канала`\n\n"
-                "📝 *Пример:*\n"
+                "📋 *Пример:*\n"
                 "`https://t.me/private_channel Приватный Канал`"
             )
         else:
@@ -665,7 +706,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "💎 *Добавление финального канала*\n\n"
                 "Введите данные в формате:\n"
                 "`ссылка Название Описание`\n\n"
-                "📝 *Пример:*\n"
+                "📋 *Пример:*\n"
                 "`https://t.me/premium Премиум Эксклюзивный контент`"
             )
         else:
@@ -689,7 +730,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     url = f"https://t.me/{username.lstrip('@')}"
                     
                     if db.add_subscription_channel(username, url, name, 'public'):
-                        await update.message.reply_text(f"✅ *Публичный канал добавлен!*\n\n📺 {name}")
+                        await update.message.reply_text(
+                            f"✅ *Публичный канал добавлен!*\n\n"
+                            f"📺 {name}\n"
+                            f"🔗 {url}\n\n"
+                            f"⚠️ *Не забудьте:* Добавить бота как администратора в канал!"
+                        )
                         await show_manage_channels(update, context)
                     else:
                         await update.message.reply_text("🔴 Ошибка при добавлении канала")
@@ -706,6 +752,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await update.message.reply_text(
                             f"✅ *Приватный канал добавлен!*\n\n"
                             f"🔒 {name}\n"
+                            f"🔗 {url}\n\n"
                             f"⚠️ Пользователи будут подтверждать подписку вручную"
                         )
                         await show_manage_channels(update, context)
@@ -722,7 +769,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     description = parts[2] if len(parts) > 2 else "🔥 Эксклюзивный контент"
                     
                     if db.add_referral_channel(url, name, description):
-                        await update.message.reply_text(f"💎 *Финальный канал добавлен!*\n\n📁 {name}")
+                        await update.message.reply_text(f"💎 *Финальный канал добавлен!*\n\n📁 {name}\n🔗 {url}")
                         await show_manage_channels(update, context)
                     else:
                         await update.message.reply_text("🔴 Ошибка при добавлении канала")
