@@ -6,7 +6,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 
 # ===== КОНФИГУРАЦИЯ =====
 BOT_TOKEN = "7557745613:AAFTpWsCJ2bZMqD6GDwTynnqA8Nc-mRF1Rs"
-ADMIN_ID =  6646433980
+ADMIN_ID = 6646433980
 DB_PATH = "bot_database.db"
 
 # Настройка логирования
@@ -445,11 +445,10 @@ async def show_manage_channels(update: Update, context: ContextTypes.DEFAULT_TYP
         channel_id, url, name, description = channel
         message_text += f"💎 {name}\n"
     
-    # 🔧 ИСПРАВЛЕНИЕ: Используем те же callback_data что и в других кнопках
     keyboard = [
         [InlineKeyboardButton("➕ Публичный канал", callback_data="add_channel_public")],
         [InlineKeyboardButton("➕ Приватный канал", callback_data="add_channel_private")],
-        [InlineKeyboardButton("🆔 Добавить по ID", callback_data="add_channel_id")],  # 🔧 ЕДИНЫЙ ФОРМАТ
+        [InlineKeyboardButton("🆔 Добавить по ID", callback_data="add_channel_id")],
         [InlineKeyboardButton("💎 Финальный канал", callback_data="add_final_channel")],
     ]
     
@@ -555,7 +554,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.answer("❌ Нет доступа")
     
-    # 🔧 ИСПРАВЛЕНИЕ: Единый формат обработки кнопок добавления
     elif data == "add_channel_public":
         if user.id == ADMIN_ID:
             context.user_data['awaiting_channel'] = 'public'
@@ -584,22 +582,41 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.answer("❌ Нет доступа")
     
-    # 🔧 КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Кнопка добавления по ID работает так же как другие
+    # 🔧 ИСПРАВЛЕННЫЙ БЛОК: Кнопка добавления по ID
     elif data == "add_channel_id":
         if user.id == ADMIN_ID:
             context.user_data['awaiting_channel'] = 'by_id'
-            await query.edit_message_text(
+            # Упрощенное сообщение без сложной разметки
+            message_text = (
                 "🆔 *Добавить канал по ID*\n\n"
                 "Отправьте в формате:\n"
                 "`chat_id Название канала`\n\n"
                 "Пример:\n"
                 "`-1001234567890 Мой Канал`\n\n"
-                "*Где взять chat_id?*\n"
-                "1. Добавьте @getmyid_bot в канал\n"
-                "2. Или используйте @RawDataBot\n"
-                "3. ID канала обычно начинается с -100",
-                parse_mode='Markdown'
+                "Где взять chat ID?\n"
+                "• Добавьте @getmyid_bot в канал\n"
+                "• Или используйте @RawDataBot\n"
+                "• ID канала обычно начинается с -100"
             )
+            try:
+                await query.edit_message_text(
+                    message_text,
+                    parse_mode='Markdown'
+                )
+            except Exception as e:
+                logger.error(f"Ошибка отправки сообщения: {e}")
+                # Резервный вариант без разметки
+                await query.edit_message_text(
+                    "🆔 Добавить канал по ID\n\n"
+                    "Отправьте в формате:\n"
+                    "chat_id Название канала\n\n"
+                    "Пример:\n"
+                    "-1001234567890 Мой Канал\n\n"
+                    "Где взять chat ID?\n"
+                    "• Добавьте @getmyid_bot в канал\n"
+                    "• Или используйте @RawDataBot\n"
+                    "• ID канала обычно начинается с -100"
+                )
         else:
             await query.answer("❌ Нет доступа")
     
@@ -659,7 +676,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.answer("❌ Нет доступа")
     
-    # 🔧 ДОБАВЛЕНО: Обработка неизвестных callback_data
     else:
         logger.warning(f"Неизвестный callback_data: {data}")
         await query.answer("❌ Неизвестная команда")
@@ -705,7 +721,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     await update.message.reply_text("❌ Неверный формат. Используйте: ссылка Название")
             
-            # 🔧 ИСПРАВЛЕНИЕ: Обработчик для добавления по ID
+            # 🔧 ИСПРАВЛЕННЫЙ БЛОК: Обработчик для добавления по ID
             elif channel_type == 'by_id':
                 parts = text.split(' ', 1)
                 if len(parts) == 2:
@@ -777,6 +793,16 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ У вас нет доступа к этой команде")
 
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик ошибок"""
+    logger.error(f"Ошибка: {context.error}", exc_info=context.error)
+    
+    if update and update.callback_query:
+        try:
+            await update.callback_query.answer("❌ Произошла ошибка, попробуйте еще раз")
+        except:
+            pass
+
 async def set_commands(application: Application):
     """Установка команд бота"""
     commands = [
@@ -790,9 +816,9 @@ def main():
     """Запуск бота"""
     print("🚀 Запуск исправленной версии бота...")
     print("🔧 Основные исправления:")
-    print("   • Кнопка 'Добавить по ID' использует тот же формат что и другие")
-    print("   • Унифицированные callback_data: add_channel_*")
-    print("   • Улучшена обработка ошибок")
+    print("   • Исправлена кнопка 'Добавить по ID'")
+    print("   • Добавлен обработчик ошибок")
+    print("   • Упрощена разметка сообщений")
     
     try:
         application = Application.builder().token(BOT_TOKEN).build()
@@ -803,6 +829,9 @@ def main():
         application.add_handler(CommandHandler("admin", admin_command))
         application.add_handler(CallbackQueryHandler(button_handler))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        
+        # Добавляем обработчик ошибок
+        application.add_error_handler(error_handler)
         
         # Устанавливаем команды
         application.post_init = set_commands
