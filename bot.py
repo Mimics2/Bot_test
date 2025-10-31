@@ -322,22 +322,23 @@ async def show_subscription_requests(update: Update, context: ContextTypes.DEFAU
             message_text += f"➤ [{channel['name']}]({channel['url']})\n"
         message_text += "\n"
     
-    # Приватные каналы - тоже в тексте, но с пояснением
+    # Приватные каналы - только названия в тексте
     if private_channels:
         message_text += "🔒 *Приватные каналы:*\n"
         for channel in private_channels:
             message_text += f"➤ {channel['name']}\n"
-        message_text += "\n*После подписки нажмите кнопку подтверждения ниже* ⬇️\n"
+        message_text += "\n*Для приватных каналов используйте кнопки ниже* ⬇️\n"
     
     message_text += "\n_После подписки нажмите кнопку проверки_"
     
     # Создаем клавиатуру только для приватных каналов и проверки
     keyboard = []
     
-    # Кнопки подтверждения для приватных каналов
+    # Кнопки с ссылками для приватных каналов
     for channel in private_channels:
         keyboard.append([
-            InlineKeyboardButton(f"✅ Подтвердить {channel['name']}", callback_data=f"confirm_{channel['id']}")
+            InlineKeyboardButton(f"🔗 {channel['name']}", url=channel['url']),
+            InlineKeyboardButton(f"✅ Подтвердить", callback_data=f"confirm_{channel['id']}")
         ])
     
     # Кнопка проверки
