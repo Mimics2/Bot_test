@@ -3,7 +3,6 @@ import sqlite3
 import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
-from telegram.error import BadRequest, Forbidden
 
 # ===== КОНФИГУРАЦИЯ =====
 BOT_TOKEN = "7557745613:AAFTpWsCJ2bZMqD6GDwTynnqA8Nc-mRF1Rs"
@@ -44,11 +43,9 @@ class Database:
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS channels (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT,
                 url TEXT,
                 name TEXT,
-                channel_type TEXT DEFAULT 'public',
-                telegram_chat_id TEXT
+                channel_type TEXT DEFAULT 'public'
             )
         ''')
         
@@ -89,13 +86,13 @@ class Database:
             logger.error(f"Ошибка добавления пользователя: {e}")
             return False
     
-    def add_channel(self, username, url, name, channel_type='public', telegram_chat_id=None):
+    def add_channel(self, url, name, channel_type='public'):
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
             cursor.execute(
-                'INSERT INTO channels (username, url, name, channel_type, telegram_chat_id) VALUES (?, ?, ?, ?, ?)',
-                (username, url, name, channel_type, telegram_chat_id)
+                'INSERT INTO channels (url, name, channel_type) VALUES (?, ?, ?)',
+                (url, name, channel_type)
             )
             conn.commit()
             conn.close()
@@ -213,71 +210,26 @@ class Database:
 # Инициализация базы данных
 db = Database(DB_PATH)
 
-# ===== УЛУЧШЕННАЯ ПРОВЕРКА ПОДПИСОК =====
+# ===== ПРОСТАЯ ПРОВЕРКА ПОДПИСОК =====
 async def check_user_subscriptions(user_id, bot):
-    """Проверка подписок пользователя с правильным поиском каналов"""
+    """Простая проверка подписок - только приватные каналы"""
     channels = db.get_channels()
     missing_channels = []
     all_subscribed = True
     
     for channel in channels:
-        channel_id, username, url, name, channel_type, telegram_chat_id = channel
+        channel_id, url, name, channel_type = channel
         
         if channel_type == 'public':
-            try:
-                subscribed = False
-                
-                # 🔧 СПОСОБ 1: Поиск по username (самый надежный)
-                if username and username.startswith('@'):
-                    try:
-                        clean_username = username.lstrip('@')
-                        logger.info(f"🔍 Проверяем канал '{name}' по username: @{clean_username}")
-                        
-                        # Получаем информацию о канале
-                        chat = await bot.get_chat(f"@{clean_username}")
-                        logger.info(f"✅ Найден канал: {chat.title} (ID: {chat.id})")
-                        
-                        # Проверяем подписку пользователя
-                        chat_member = await bot.get_chat_member(chat.id, user_id)
-                        subscribed = chat_member.status in ['member', 'administrator', 'creator']
-                        
-                        logger.info(f"📊 Пользователь {user_id} подписан на '{name}': {subscribed}")
-                        
-                    except BadRequest as e:
-                        logger.error(f"❌ Ошибка при проверке по username @{clean_username}: {e}")
-                        
-                        # 🔧 СПОСОБ 2: Пробуем по ссылке (если есть telegram_chat_id)
-                        if telegram_chat_id:
-                            try:
-                                logger.info(f"🔄 Пробуем проверку по chat_id: {telegram_chat_id}")
-                                chat_member = await bot.get_chat_member(telegram_chat_id, user_id)
-                                subscribed = chat_member.status in ['member', 'administrator', 'creator']
-                                logger.info(f"✅ Проверка по chat_id успешна: {subscribed}")
-                            except BadRequest as e2:
-                                logger.error(f"❌ Ошибка проверки по chat_id {telegram_chat_id}: {e2}")
-                                subscribed = False
-                        else:
-                            subscribed = False
-                
-                # Если не удалось проверить подписку
-                if not subscribed:
-                    all_subscribed = False
-                    missing_channels.append({
-                        'id': channel_id,
-                        'name': name,
-                        'url': url,
-                        'type': 'public'
-                    })
-                    
-            except Exception as e:
-                logger.error(f"❌ Критическая ошибка проверки канала '{name}': {e}")
-                all_subscribed = False
-                missing_channels.append({
-                    'id': channel_id,
-                    'name': f"{name} (ошибка проверки)",
-                    'url': url,
-                    'type': 'public'
-                })
+            # Для публичных каналов всегда считаем, что нужно подписаться
+            # (так как проверка через бота не работает)
+            all_subscribed = False
+            missing_channels.append({
+                'id': channel_id,
+                'name': name,
+                'url': url,
+                'type': 'public'
+            })
         
         elif channel_type == 'private':
             if not db.is_subscribed(user_id, channel_id):
@@ -455,10 +407,9 @@ async def show_manage_channels(update: Update, context: ContextTypes.DEFAULT_TYP
 """
     
     for channel in channels:
-        channel_id, username, url, name, channel_type, telegram_chat_id = channel
+        channel_id, url, name, channel_type = channel
         type_icon = "🔓" if channel_type == 'public' else "🔒"
-        identifier = f"@{username}" if username else "ссылка"
-        message_text += f"{type_icon} {name} ({identifier})\n"
+        message_text += f"{type_icon} {name}\n"
     
     message_text += f"\n💎 Финальные каналы ({len(final_channels)}):\n"
     
@@ -499,7 +450,7 @@ async def show_delete_channels(update: Update, context: ContextTypes.DEFAULT_TYP
     
     keyboard = []
     for channel in channels:
-        channel_id, username, url, name, channel_type, telegram_chat_id = channel
+        channel_id, url, name, channel_type = channel
         type_icon = "🔓" if channel_type == 'public' else "🔒"
         keyboard.append([InlineKeyboardButton(f"{type_icon} {name}", callback_data=f"delete_channel_{channel_id}")])
     
@@ -579,14 +530,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data['awaiting_channel'] = 'public'
                 await query.edit_message_text(
                     "➕ Добавить публичный канал\n\n"
+                    "⚠️ ВАЖНО: Бот НЕ будет проверять подписки на публичные каналы!\n"
+                    "Пользователям просто покажут ссылку для подписки.\n\n"
                     "Отправьте в формате:\n"
-                    "@username Название канала\n\n"
+                    "ссылка Название канала\n\n"
                     "Пример:\n"
-                    "@my_channel Мой Канал\n\n"
-                    "⚠️ Убедитесь, что:\n"
-                    "• Канал публичный\n" 
-                    "• Есть username (@...)\n"
-                    "• Бот - администратор канала"
+                    "https://t.me/mychannel Мой Канал"
                 )
             else:
                 await query.answer("❌ Нет доступа")
@@ -672,47 +621,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             if channel_type == 'public':
                 parts = text.split(' ', 1)
-                if len(parts) == 2 and parts[0].startswith('@'):
-                    username = parts[0]
+                if len(parts) == 2:
+                    url = parts[0]
                     name = parts[1]
-                    clean_username = username.lstrip('@')
-                    url = f"https://t.me/{clean_username}"
                     
-                    # 🔧 Пытаемся найти канал и получить его ID
-                    try:
-                        chat = await context.bot.get_chat(f"@{clean_username}")
-                        telegram_chat_id = str(chat.id)
-                        logger.info(f"✅ Найден канал: {chat.title} (ID: {telegram_chat_id})")
-                        
-                        if db.add_channel(username, url, name, 'public', telegram_chat_id):
-                            await update.message.reply_text(
-                                f"✅ Публичный канал добавлен!\n\n"
-                                f"📝 Название: {name}\n"
-                                f"🔗 Ссылка: {url}\n"
-                                f"👤 Username: {username}\n"
-                                f"🆔 ID канала: {telegram_chat_id}"
-                            )
-                            await show_manage_channels(update, context)
-                        else:
-                            await update.message.reply_text("❌ Ошибка добавления канала")
-                    
-                    except BadRequest as e:
-                        logger.error(f"❌ Не удалось найти канал @{clean_username}: {e}")
+                    if db.add_channel(url, name, 'public'):
                         await update.message.reply_text(
-                            f"❌ Не удалось найти канал @{clean_username}\n\n"
-                            f"Проверьте:\n"
-                            f"• Канал существует и публичный\n"
-                            f"• Username правильный\n"
-                            f"• Бот является администратором канала"
+                            f"✅ Публичный канал добавлен!\n\n"
+                            f"📝 Название: {name}\n"
+                            f"🔗 Ссылка: {url}\n\n"
+                            f"⚠️ Бот НЕ проверяет подписки на публичные каналы!\n"
+                            f"Пользователям просто покажут ссылку для подписки."
                         )
-                        return
-                    
+                        await show_manage_channels(update, context)
+                    else:
+                        await update.message.reply_text("❌ Ошибка добавления канала")
                 else:
                     await update.message.reply_text(
                         "❌ Неверный формат. Используйте:\n"
-                        "@username Название канала\n\n"
+                        "ссылка Название канала\n\n"
                         "Пример:\n"
-                        "@my_channel Мой Канал"
+                        "https://t.me/mychannel Мой Канал"
                     )
             
             elif channel_type == 'private':
@@ -721,7 +650,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     url = parts[0]
                     name = parts[1]
                     
-                    if db.add_channel(None, url, name, 'private'):
+                    if db.add_channel(url, name, 'private'):
                         await update.message.reply_text(
                             f"✅ Приватный канал добавлен!\n\n"
                             f"📝 Название: {name}\n"
@@ -790,12 +719,12 @@ async def set_commands(application: Application):
 
 def main():
     """Запуск бота"""
-    print("🚀 Запуск бота с улучшенным поиском каналов...")
-    print("🔧 Основные улучшения:")
-    print("   • Бот ищет канал по username и получает его ID")
-    print("   • Сохраняет ID канала для надежной проверки")
-    print("   • Улучшена обработка ошибок 'чат не найден'")
-    print("   • Детальное логирование процесса поиска каналов")
+    print("🚀 Запуск УПРОЩЕННОГО бота...")
+    print("🔧 Основные изменения:")
+    print("   • Убрана проверка подписок для публичных каналов")
+    print("   • Публичные каналы просто показывают ссылку")
+    print("   • Приватные каналы работают через подтверждение")
+    print("   • Максимально простая логика")
     
     try:
         application = Application.builder().token(BOT_TOKEN).build()
@@ -811,11 +740,10 @@ def main():
         application.post_init = set_commands
         
         print("✅ Бот запущен!")
-        print("📝 Инструкция:")
-        print("   1. Убедитесь что канал публичный и имеет username")
-        print("   2. Добавьте бота как администратора в канал") 
-        print("   3. В боте: /admin → Управление каналами → Публичный канал")
-        print("   4. Отправьте: @username_канала Название")
+        print("📝 Как использовать:")
+        print("   1. Для публичных каналов: просто добавьте ссылку")
+        print("   2. Для приватных каналов: добавьте пригласительную ссылку")
+        print("   3. Пользователи будут видеть ссылки и подтверждать подписки")
         
         application.run_polling()
         
