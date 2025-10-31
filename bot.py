@@ -1,28 +1,22 @@
 import logging
 import sqlite3
 import os
+import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
 # ===== КОНФИГУРАЦИЯ =====
-BOT_TOKEN = "7557745613:AAFTpWsCJ2bZMqD6GDwTynnqA8Nc-mRF1Rs"  # ЗАМЕНИТЕ НА ВАШ ТОКЕН
-ADMIN_ID = 6646433980 # ЗАМЕНИТЕ НА ВАШ TELEGRAM ID
+BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"  # ЗАМЕНИТЕ НА ВАШ ТОКЕН
+ADMIN_ID = 123456789  # ЗАМЕНИТЕ НА ВАШ TELEGRAM ID
 DB_PATH = "bot_database.db"
 
 # Проверка токена
 if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
     print("❌ ОШИБКА: Замените BOT_TOKEN на ваш настоящий токен!")
-    print("📝 Как получить токен:")
-    print("1. Напишите @BotFather в Telegram")
-    print("2. Используйте команду /newbot") 
-    print("3. Следуйте инструкциям и скопируйте токен")
     exit(1)
 
 if ADMIN_ID == 123456789:
     print("❌ ОШИБКА: Замените ADMIN_ID на ваш Telegram ID!")
-    print("📝 Как получить ID:")
-    print("1. Напишите @userinfobot в Telegram")
-    print("2. Он покажет ваш ID")
     exit(1)
 
 # Настройка логирования
@@ -33,8 +27,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 print("🚀 Инициализация бота...")
-print(f"✅ Токен: {BOT_TOKEN[:10]}...{BOT_TOKEN[-10:]}")
-print(f"✅ Админ ID: {ADMIN_ID}")
 
 # ===== БАЗА ДАННЫХ =====
 class Database:
@@ -59,14 +51,15 @@ class Database:
             )
         ''')
         
-        # Таблица каналов для подписки
+        # Таблица каналов для подписки (ДОБАВЛЕНО ПОЛЕ ДЛЯ TELEGRAM CHAT ID)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS channels (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT,
                 url TEXT,
                 name TEXT,
-                channel_type TEXT DEFAULT 'public'
+                channel_type TEXT DEFAULT 'public',
+                telegram_chat_id INTEGER
             )
         ''')
         
@@ -109,13 +102,13 @@ class Database:
             logger.error(f"Ошибка добавления пользователя: {e}")
             return False
     
-    def add_channel(self, username, url, name, channel_type='public'):
+    def add_channel(self, username, url, name, channel_type='public', telegram_chat_id=None):
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
             cursor.execute(
-                'INSERT INTO channels (username, url, name, channel_type) VALUES (?, ?, ?, ?)',
-                (username, url, name, channel_type)
+                'INSERT INTO channels (username, url, name, channel_type, telegram_chat_id) VALUES (?, ?, ?, ?, ?)',
+                (username, url, name, channel_type, telegram_chat_id)
             )
             conn.commit()
             conn.close()
@@ -235,20 +228,33 @@ db = Database(DB_PATH)
 
 # ===== ОСНОВНЫЕ ФУНКЦИИ =====
 async def check_user_subscriptions(user_id, bot):
-    """Проверка подписок пользователя"""
+    """Проверка подписок пользователя с использованием ID канала"""
     channels = db.get_channels()
     missing_channels = []
     all_subscribed = True
     
     for channel in channels:
-        channel_id, username, url, name, channel_type = channel
+        channel_id, username, url, name, channel_type, telegram_chat_id = channel
         
         if channel_type == 'public':
             try:
-                if username:
-                    # Убираем @ из username
+                # 🔧 ПЕРВОЕ ИСПРАВЛЕНИЕ: Используем telegram_chat_id если доступен
+                if telegram_chat_id:
+                    # Используем числовой ID для проверки [citation:5]
+                    chat_member = await bot.get_chat_member(telegram_chat_id, user_id)
+                    subscribed = chat_member.status in ['member', 'administrator', 'creator']
+                    
+                    if not subscribed:
+                        all_subscribed = False
+                        missing_channels.append({
+                            'id': channel_id,
+                            'name': name,
+                            'url': url,
+                            'type': 'public'
+                        })
+                elif username:
+                    # Резервный вариант через username
                     clean_username = username.lstrip('@')
-                    # Проверяем подписку
                     chat_member = await bot.get_chat_member(f"@{clean_username}", user_id)
                     subscribed = chat_member.status in ['member', 'administrator', 'creator']
                     
@@ -261,11 +267,11 @@ async def check_user_subscriptions(user_id, bot):
                             'type': 'public'
                         })
             except Exception as e:
-                logger.error(f"Ошибка проверки канала {username}: {e}")
+                logger.error(f"Ошибка проверки канала {name}: {e}")
                 all_subscribed = False
                 missing_channels.append({
                     'id': channel_id,
-                    'name': name,
+                    'name': f"{name} (ошибка проверки)",
                     'url': url,
                     'type': 'public'
                 })
@@ -288,7 +294,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     logger.info(f"Пользователь {user.id} запустил бота")
     
-    # Добавляем пользователя в базу
     db.add_user(user.id, user.username, user.full_name)
     
     welcome_text = f"""
@@ -311,7 +316,6 @@ async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text("🔍 Проверяю подписки...")
     
-    # Проверяем подписки
     all_subscribed, missing_channels = await check_user_subscriptions(user.id, context.bot)
     
     if all_subscribed:
@@ -380,7 +384,6 @@ async def show_final_content(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
         return
     
-    # Показываем первый финальный канал
     channel = final_channels[0]
     channel_id, url, name, description = channel
     
@@ -408,15 +411,127 @@ async def show_final_content(update: Update, context: ContextTypes.DEFAULT_TYPE)
     else:
         await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
 
+async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать админ-панель"""
+    user_count = db.get_user_count()
+    channels = db.get_channels()
+    final_channels = db.get_final_channels()
+    
+    message_text = f"""
+⚙️ *Панель администратора*
+
+📊 Статистика:
+• 👥 Пользователей: {user_count}
+• 📺 Каналов: {len(channels)}
+• 💎 Финальных каналов: {len(final_channels)}
+
+Выберите действие:
+    """
+    
+    keyboard = [
+        [InlineKeyboardButton("📺 Управление каналами", callback_data="admin_manage_channels")],
+        [InlineKeyboardButton("🔄 Проверить подписки", callback_data="check_subscriptions")]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    if update.callback_query:
+        await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
+    else:
+        await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
+
+async def show_manage_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать управление каналами с исправленными кнопками удаления"""
+    channels = db.get_channels()
+    final_channels = db.get_final_channels()
+    
+    message_text = f"""
+📊 *Управление каналами*
+
+📺 Каналы для подписки ({len(channels)}):
+"""
+    
+    for channel in channels:
+        channel_id, username, url, name, channel_type, telegram_chat_id = channel
+        type_icon = "🔓" if channel_type == 'public' else "🔒"
+        identifier = f"ID: {telegram_chat_id}" if telegram_chat_id else f"@{username}" if username else "ссылка"
+        message_text += f"{type_icon} {name} ({identifier})\n"
+    
+    message_text += f"\n💎 Финальные каналы ({len(final_channels)}):\n"
+    
+    for channel in final_channels:
+        channel_id, url, name, description = channel
+        message_text += f"💎 {name}\n"
+    
+    keyboard = [
+        [InlineKeyboardButton("➕ Публичный канал", callback_data="admin_add_public")],
+        [InlineKeyboardButton("➕ Приватный канал", callback_data="admin_add_private")],
+        [InlineKeyboardButton("🆔 Добавить по ID", callback_data="admin_add_by_id")],
+        [InlineKeyboardButton("💎 Финальный канал", callback_data="admin_add_final")],
+    ]
+    
+    # 🔧 ВТОРОЕ ИСПРАВЛЕНИЕ: Рабочие кнопки удаления
+    if channels:
+        keyboard.append([InlineKeyboardButton("🗑 Удалить канал подписки", callback_data="show_delete_channels")])
+    
+    if final_channels:
+        keyboard.append([InlineKeyboardButton("🗑 Удалить финальный канал", callback_data="show_delete_final")])
+    
+    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="admin_panel")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    if update.callback_query:
+        await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
+    else:
+        await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
+
+async def show_delete_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать каналы для удаления"""
+    channels = db.get_channels()
+    
+    if not channels:
+        await update.callback_query.answer("❌ Нет каналов для удаления", show_alert=True)
+        return
+    
+    keyboard = []
+    for channel in channels:
+        channel_id, username, url, name, channel_type, telegram_chat_id = channel
+        type_icon = "🔓" if channel_type == 'public' else "🔒"
+        keyboard.append([InlineKeyboardButton(f"{type_icon} {name}", callback_data=f"delete_channel_{channel_id}")])
+    
+    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="manage_channels")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.callback_query.edit_message_text("🗑 *Выберите канал для удаления:*", reply_markup=reply_markup, parse_mode='Markdown')
+
+async def show_delete_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать финальные каналы для удаления"""
+    channels = db.get_final_channels()
+    
+    if not channels:
+        await update.callback_query.answer("❌ Нет финальных каналов для удаления", show_alert=True)
+        return
+    
+    keyboard = []
+    for channel in channels:
+        channel_id, url, name, description = channel
+        keyboard.append([InlineKeyboardButton(f"💎 {name}", callback_data=f"delete_final_{channel_id}")])
+    
+    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="manage_channels")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.callback_query.edit_message_text("🗑 *Выберите финальный канал для удаления:*", reply_markup=reply_markup, parse_mode='Markdown')
+
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик нажатий кнопок"""
+    """Обработчик нажатий кнопок с исправленным удалением"""
     query = update.callback_query
     await query.answer()
     
     user = update.effective_user
     data = query.data
     
-    logger.info(f"Нажата кнопка: {data} пользователем {user.id}")
+    logger.info(f"Нажата кнопка: {data}")
     
     if data == "check_subscriptions":
         db.add_user(user.id, user.username, user.full_name)
@@ -433,7 +548,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if db.confirm_subscription(user.id, channel_id):
             await query.answer("✅ Подписка подтверждена!")
             
-            # Проверяем все подписки снова
             all_subscribed, missing_channels = await check_user_subscriptions(user.id, context.bot)
             
             if all_subscribed:
@@ -483,6 +597,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.answer("❌ Нет доступа")
     
+    elif data == "admin_add_by_id":
+        if user.id == ADMIN_ID:
+            context.user_data['awaiting_channel'] = 'by_id'
+            await query.edit_message_text(
+                "🆔 *Добавить канал по ID*\n\n"
+                "Отправьте в формате:\n"
+                "`chat_id Название канала`\n\n"
+                "Пример:\n"
+                "`-1001234567890 Мой Канал`\n\n"
+                "Где chat_id — числовой идентификатор канала/чата",
+                parse_mode='Markdown'
+            )
+        else:
+            await query.answer("❌ Нет доступа")
+    
     elif data == "admin_add_final":
         if user.id == ADMIN_ID:
             context.user_data['awaiting_channel'] = 'final'
@@ -497,13 +626,31 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.answer("❌ Нет доступа")
     
+    elif data == "show_delete_channels":
+        if user.id == ADMIN_ID:
+            await show_delete_channels(update, context)
+        else:
+            await query.answer("❌ Нет доступа")
+    
+    elif data == "show_delete_final":
+        if user.id == ADMIN_ID:
+            await show_delete_final(update, context)
+        else:
+            await query.answer("❌ Нет доступа")
+    
+    # 🔧 ТРЕТЬЕ ИСПРАВЛЕНИЕ: Рабочие обработчики удаления
     elif data.startswith("delete_channel_"):
         if user.id == ADMIN_ID:
             channel_id = int(data.replace("delete_channel_", ""))
-            if db.remove_channel(channel_id):
-                await query.answer("✅ Канал удален")
-                await show_manage_channels(update, context)
-            else:
+            try:
+                if db.remove_channel(channel_id):
+                    await query.answer("✅ Канал удален!")
+                    # Обновляем сообщение чтобы убрать удаленный канал из списка
+                    await show_manage_channels(update, context)
+                else:
+                    await query.answer("❌ Ошибка при удалении канала")
+            except Exception as e:
+                logger.error(f"Ошибка удаления канала: {e}")
                 await query.answer("❌ Ошибка удаления")
         else:
             await query.answer("❌ Нет доступа")
@@ -511,99 +658,22 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("delete_final_"):
         if user.id == ADMIN_ID:
             channel_id = int(data.replace("delete_final_", ""))
-            if db.remove_final_channel(channel_id):
-                await query.answer("✅ Канал удален")
-                await show_manage_channels(update, context)
-            else:
+            try:
+                if db.remove_final_channel(channel_id):
+                    await query.answer("✅ Финальный канал удален!")
+                    await show_manage_channels(update, context)
+                else:
+                    await query.answer("❌ Ошибка при удалении финального канала")
+            except Exception as e:
+                logger.error(f"Ошибка удаления финального канала: {e}")
                 await query.answer("❌ Ошибка удаления")
         else:
             await query.answer("❌ Нет доступа")
 
-async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показать админ-панель"""
-    user_count = db.get_user_count()
-    channels = db.get_channels()
-    final_channels = db.get_final_channels()
-    
-    message_text = f"""
-⚙️ *Панель администратора*
-
-📊 Статистика:
-• 👥 Пользователей: {user_count}
-• 📺 Каналов: {len(channels)}
-• 💎 Финальных каналов: {len(final_channels)}
-
-Выберите действие:
-    """
-    
-    keyboard = [
-        [InlineKeyboardButton("📺 Управление каналами", callback_data="admin_manage_channels")],
-        [InlineKeyboardButton("🔄 Проверить подписки", callback_data="check_subscriptions")]
-    ]
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    if update.callback_query:
-        await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
-    else:
-        await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
-
-async def show_manage_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показать управление каналами"""
-    channels = db.get_channels()
-    final_channels = db.get_final_channels()
-    
-    message_text = f"""
-📊 *Управление каналами*
-
-📺 Каналы для подписки ({len(channels)}):
-"""
-    
-    for channel in channels:
-        channel_id, username, url, name, channel_type = channel
-        icon = "🔓" if channel_type == 'public' else "🔒"
-        message_text += f"{icon} {name} ({username})\n"
-    
-    message_text += f"\n💎 Финальные каналы ({len(final_channels)}):\n"
-    
-    for channel in final_channels:
-        channel_id, url, name, description = channel
-        message_text += f"💎 {name}\n"
-    
-    keyboard = [
-        [InlineKeyboardButton("➕ Публичный канал", callback_data="admin_add_public")],
-        [InlineKeyboardButton("➕ Приватный канал", callback_data="admin_add_private")],
-        [InlineKeyboardButton("💎 Финальный канал", callback_data="admin_add_final")],
-    ]
-    
-    # Кнопки удаления каналов
-    if channels:
-        keyboard.append([InlineKeyboardButton("🗑 Удалить канал подписки", callback_data="show_delete_channels")])
-    
-    if final_channels:
-        keyboard.append([InlineKeyboardButton("🗑 Удалить финальный канал", callback_data="show_delete_final")])
-    
-    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="admin_panel")])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    if update.callback_query:
-        await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
-    else:
-        await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
-
-async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /admin"""
-    if update.effective_user.id == ADMIN_ID:
-        await show_admin_panel(update, context)
-    else:
-        await update.message.reply_text("❌ У вас нет доступа к этой команде")
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик текстовых сообщений"""
+    """Обработчик текстовых сообщений с поддержкой добавления по ID"""
     user = update.effective_user
     
-    # Если это админ и он ожидает ввод канала
     if user.id == ADMIN_ID and context.user_data.get('awaiting_channel'):
         channel_type = context.user_data['awaiting_channel']
         text = update.message.text.strip()
@@ -638,6 +708,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     await update.message.reply_text("❌ Неверный формат. Используйте: ссылка Название")
             
+            elif channel_type == 'by_id':
+                parts = text.split(' ', 1)
+                if len(parts) == 2:
+                    chat_id_str = parts[0]
+                    name = parts[1]
+                    
+                    try:
+                        chat_id = int(chat_id_str)
+                        # Для каналов ID обычно отрицательные, для супергрупп с префиксом -100
+                        url = f"https://t.me/c/{str(chat_id).replace('-100', '')}" if chat_id < 0 else f"https://t.me/{chat_id}"
+                        
+                        if db.add_channel(None, url, name, 'public', chat_id):
+                            await update.message.reply_text(f"✅ Канал по ID добавлен:\n{name}\nID: {chat_id}\n{url}")
+                            await show_manage_channels(update, context)
+                        else:
+                            await update.message.reply_text("❌ Ошибка добавления канала")
+                    except ValueError:
+                        await update.message.reply_text("❌ ID должен быть числом")
+                else:
+                    await update.message.reply_text("❌ Неверный формат. Используйте: chat_id Название")
+            
             elif channel_type == 'final':
                 parts = text.split(' ', 2)
                 if len(parts) >= 2:
@@ -653,7 +744,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     await update.message.reply_text("❌ Неверный формат. Используйте: ссылка Название [Описание]")
             
-            # Сбрасываем состояние
             context.user_data['awaiting_channel'] = None
             
         except Exception as e:
@@ -661,13 +751,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ Ошибка: {str(e)}")
             context.user_data['awaiting_channel'] = None
     else:
-        # Обычное сообщение - предлагаем команды
         await update.message.reply_text(
             "Используйте команды:\n"
             "/start - начать работу\n"
             "/check - проверить подписки\n"
             "/admin - панель управления (только для админа)"
         )
+
+async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /admin"""
+    if update.effective_user.id == ADMIN_ID:
+        await show_admin_panel(update, context)
+    else:
+        await update.message.reply_text("❌ У вас нет доступа к этой команде")
 
 async def set_commands(application: Application):
     """Установка команд бота"""
@@ -680,31 +776,28 @@ async def set_commands(application: Application):
 
 def main():
     """Запуск бота"""
-    print("🤖 Создание приложения...")
+    print("🚀 Запуск улучшенной версии бота...")
+    print("🔧 Основные исправления:")
+    print("   • Добавлено добавление каналов по ID")
+    print("   • Исправлены кнопки удаления каналов")
+    print("   • Улучшена проверка подписок через chat_id")
     
     try:
-        # Создаем приложение
         application = Application.builder().token(BOT_TOKEN).build()
         
-        # Добавляем обработчики
         application.add_handler(CommandHandler("start", start_command))
         application.add_handler(CommandHandler("check", check_command))
         application.add_handler(CommandHandler("admin", admin_command))
         application.add_handler(CallbackQueryHandler(button_handler))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         
-        # Устанавливаем команды
         application.post_init = set_commands
         
-        print("✅ Бот успешно запущен!")
-        print("📝 Напишите /start в Telegram для начала работы")
-        
-        # Запускаем бота
+        print("✅ Бот запущен с исправлениями!")
         application.run_polling()
         
     except Exception as e:
-        print(f"❌ Критическая ошибка: {e}")
-        print("Проверьте правильность токена и подключение к интернету")
+        logger.error(f"Ошибка запуска: {e}")
 
 if __name__ == "__main__":
     main()
