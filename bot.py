@@ -5,8 +5,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotComm
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
 # ===== КОНФИГУРАЦИЯ =====
-BOT_TOKEN = "7557745613:AAFTpWsCJ2bZMqD6GDwTynnqA8Nc-mRF1Rs"
-ADMIN_ID =  6646433980
+BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
+ADMIN_ID = 123456789
 DB_PATH = "bot_database.db"
 
 # Настройка логирования
@@ -224,7 +224,6 @@ async def check_user_subscriptions(user_id, bot):
         
         if channel_type == 'public':
             try:
-                # Сначала пробуем по telegram_chat_id
                 if telegram_chat_id:
                     chat_member = await bot.get_chat_member(telegram_chat_id, user_id)
                     subscribed = chat_member.status in ['member', 'administrator', 'creator']
@@ -238,7 +237,6 @@ async def check_user_subscriptions(user_id, bot):
                             'type': 'public'
                         })
                 elif username:
-                    # Резервный вариант через username
                     clean_username = username.lstrip('@')
                     chat_member = await bot.get_chat_member(f"@{clean_username}", user_id)
                     subscribed = chat_member.status in ['member', 'administrator', 'creator']
@@ -447,11 +445,11 @@ async def show_manage_channels(update: Update, context: ContextTypes.DEFAULT_TYP
         channel_id, url, name, description = channel
         message_text += f"💎 {name}\n"
     
-    # 🔧 ИСПРАВЛЕНИЕ: Правильные callback_data для кнопок
+    # 🔧 ИСПРАВЛЕНИЕ: Используем те же callback_data что и в других кнопках
     keyboard = [
-        [InlineKeyboardButton("➕ Публичный канал", callback_data="add_public_channel")],
-        [InlineKeyboardButton("➕ Приватный канал", callback_data="add_private_channel")],
-        [InlineKeyboardButton("🆔 Добавить по ID", callback_data="add_by_id")],  # 🔧 ИСПРАВЛЕНО
+        [InlineKeyboardButton("➕ Публичный канал", callback_data="add_channel_public")],
+        [InlineKeyboardButton("➕ Приватный канал", callback_data="add_channel_private")],
+        [InlineKeyboardButton("🆔 Добавить по ID", callback_data="add_channel_id")],  # 🔧 ЕДИНЫЙ ФОРМАТ
         [InlineKeyboardButton("💎 Финальный канал", callback_data="add_final_channel")],
     ]
     
@@ -551,14 +549,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.answer("❌ Нет доступа")
     
-    # 🔧 ИСПРАВЛЕНИЕ: Правильные обработчики для кнопок управления каналами
     elif data == "manage_channels":
         if user.id == ADMIN_ID:
             await show_manage_channels(update, context)
         else:
             await query.answer("❌ Нет доступа")
     
-    elif data == "add_public_channel":
+    # 🔧 ИСПРАВЛЕНИЕ: Единый формат обработки кнопок добавления
+    elif data == "add_channel_public":
         if user.id == ADMIN_ID:
             context.user_data['awaiting_channel'] = 'public'
             await query.edit_message_text(
@@ -572,7 +570,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.answer("❌ Нет доступа")
     
-    elif data == "add_private_channel":
+    elif data == "add_channel_private":
         if user.id == ADMIN_ID:
             context.user_data['awaiting_channel'] = 'private'
             await query.edit_message_text(
@@ -586,8 +584,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.answer("❌ Нет доступа")
     
-    # 🔧 ИСПРАВЛЕНИЕ: Добавлен обработчик для кнопки добавления по ID
-    elif data == "add_by_id":
+    # 🔧 КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Кнопка добавления по ID работает так же как другие
+    elif data == "add_channel_id":
         if user.id == ADMIN_ID:
             context.user_data['awaiting_channel'] = 'by_id'
             await query.edit_message_text(
@@ -660,11 +658,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.answer("❌ Ошибка удаления")
         else:
             await query.answer("❌ Нет доступа")
+    
+    # 🔧 ДОБАВЛЕНО: Обработка неизвестных callback_data
+    else:
+        logger.warning(f"Неизвестный callback_data: {data}")
+        await query.answer("❌ Неизвестная команда")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик текстовых сообщений"""
     user = update.effective_user
     
+    # Проверяем, ожидаем ли мы ввод канала от админа
     if user.id == ADMIN_ID and context.user_data.get('awaiting_channel'):
         channel_type = context.user_data['awaiting_channel']
         text = update.message.text.strip()
@@ -713,7 +717,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         # Формируем URL для канала
                         if chat_id < 0:
                             # Для каналов и супергрупп
-                            url = f"https://t.me/c/{str(abs(chat_id)).replace('100', '')}"
+                            clean_id = str(abs(chat_id))
+                            if clean_id.startswith('100'):
+                                clean_id = clean_id[3:]
+                            url = f"https://t.me/c/{clean_id}"
                         else:
                             # Для пользователей (обычно не используется для каналов)
                             url = f"https://t.me/{chat_id}"
@@ -782,10 +789,10 @@ async def set_commands(application: Application):
 def main():
     """Запуск бота"""
     print("🚀 Запуск исправленной версии бота...")
-    print("🔧 Исправления:")
-    print("   • Кнопка 'Добавить по ID' теперь работает")
-    print("   • Улучшена обработка callback_data")
-    print("   • Добавлено логирование для отладки")
+    print("🔧 Основные исправления:")
+    print("   • Кнопка 'Добавить по ID' использует тот же формат что и другие")
+    print("   • Унифицированные callback_data: add_channel_*")
+    print("   • Улучшена обработка ошибок")
     
     try:
         application = Application.builder().token(BOT_TOKEN).build()
@@ -800,16 +807,18 @@ def main():
         # Устанавливаем команды
         application.post_init = set_commands
         
-        print("✅ Бот запущен с исправлениями!")
-        print("📝 Для тестирования:")
+        print("✅ Бот запущен!")
+        print("📝 Для тестирования кнопки добавления по ID:")
         print("   1. Напишите /admin")
-        print("   2. Нажмите 'Управление каналами'")
-        print("   3. Нажмите 'Добавить по ID'")
+        print("   2. Нажмите 'Управление каналами'") 
+        print("   3. Нажмите '🆔 Добавить по ID'")
+        print("   4. Отправьте: -1001234567890 Тестовый канал")
         
         application.run_polling()
         
     except Exception as e:
         logger.error(f"Ошибка запуска: {e}")
+        print(f"❌ Критическая ошибка: {e}")
 
 if __name__ == "__main__":
     main()
