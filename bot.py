@@ -3,6 +3,7 @@ import sqlite3
 import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
+from telegram.error import BadRequest, Forbidden
 
 # ===== КОНФИГУРАЦИЯ =====
 BOT_TOKEN = "7557745613:AAFTpWsCJ2bZMqD6GDwTynnqA8Nc-mRF1Rs"
@@ -212,9 +213,9 @@ class Database:
 # Инициализация базы данных
 db = Database(DB_PATH)
 
-# ===== ОСНОВНЫЕ ФУНКЦИИ =====
+# ===== УЛУЧШЕННАЯ ПРОВЕРКА ПОДПИСОК =====
 async def check_user_subscriptions(user_id, bot):
-    """Проверка подписок пользователя"""
+    """Проверка подписок пользователя с улучшенной обработкой ошибок"""
     channels = db.get_channels()
     missing_channels = []
     all_subscribed = True
@@ -224,33 +225,75 @@ async def check_user_subscriptions(user_id, bot):
         
         if channel_type == 'public':
             try:
+                subscribed = False
+                
+                # 🔧 ПРИОРИТЕТ 1: Проверка по chat_id (самый надежный способ)
                 if telegram_chat_id:
-                    chat_member = await bot.get_chat_member(telegram_chat_id, user_id)
-                    subscribed = chat_member.status in ['member', 'administrator', 'creator']
+                    try:
+                        logger.info(f"🔍 Проверка канала '{name}' по ID: {telegram_chat_id}")
+                        chat_member = await bot.get_chat_member(telegram_chat_id, user_id)
+                        subscribed = chat_member.status in ['member', 'administrator', 'creator']
+                        if subscribed:
+                            logger.info(f"✅ Пользователь {user_id} подписан на канал '{name}'")
+                        else:
+                            logger.info(f"❌ Пользователь {user_id} НЕ подписан на канал '{name}'")
+                            
+                    except BadRequest as e:
+                        error_msg = str(e)
+                        if "Chat not found" in error_msg:
+                            logger.error(f"❌ Чат не найден по ID {telegram_chat_id} для канала '{name}'")
+                            # Пробуем через username как запасной вариант
+                            if username and username.startswith('@'):
+                                try:
+                                    clean_username = username.lstrip('@')
+                                    logger.info(f"🔄 Пробуем проверку по username: {clean_username}")
+                                    chat_member = await bot.get_chat_member(f"@{clean_username}", user_id)
+                                    subscribed = chat_member.status in ['member', 'administrator', 'creator']
+                                    logger.info(f"✅ Проверка по username успешна: {subscribed}")
+                                except BadRequest as e2:
+                                    logger.error(f"❌ Ошибка проверки по username {username}: {e2}")
+                                    subscribed = False
+                        elif "User not found" in error_msg:
+                            logger.error(f"❌ Пользователь {user_id} не найден в канале '{name}'")
+                            subscribed = False
+                        elif "bot is not a member" in error_msg.lower():
+                            logger.error(f"❌ Бот не является участником канала '{name}'")
+                            # Если бот не в канале, считаем что пользователь не подписан
+                            subscribed = False
+                        else:
+                            logger.error(f"❌ Неизвестная ошибка при проверке канала '{name}': {e}")
+                            subscribed = False
+                
+                # 🔧 ПРИОРИТЕТ 2: Проверка по username (если нет chat_id)
+                elif username and username.startswith('@'):
+                    try:
+                        clean_username = username.lstrip('@')
+                        logger.info(f"🔍 Проверка канала '{name}' по username: {clean_username}")
+                        chat_member = await bot.get_chat_member(f"@{clean_username}", user_id)
+                        subscribed = chat_member.status in ['member', 'administrator', 'creator']
+                        logger.info(f"✅ Проверка по username успешна: {subscribed}")
+                    except BadRequest as e:
+                        error_msg = str(e)
+                        if "Chat not found" in error_msg:
+                            logger.error(f"❌ Чат не найден по username @{clean_username}")
+                        elif "User not found" in error_msg:
+                            logger.error(f"❌ Пользователь {user_id} не найден в канале '{name}'")
+                        else:
+                            logger.error(f"❌ Ошибка проверки канала '{name}' по username: {e}")
+                        subscribed = False
+                
+                # Если не удалось проверить подписку
+                if not subscribed:
+                    all_subscribed = False
+                    missing_channels.append({
+                        'id': channel_id,
+                        'name': name,
+                        'url': url,
+                        'type': 'public'
+                    })
                     
-                    if not subscribed:
-                        all_subscribed = False
-                        missing_channels.append({
-                            'id': channel_id,
-                            'name': name,
-                            'url': url,
-                            'type': 'public'
-                        })
-                elif username:
-                    clean_username = username.lstrip('@')
-                    chat_member = await bot.get_chat_member(f"@{clean_username}", user_id)
-                    subscribed = chat_member.status in ['member', 'administrator', 'creator']
-                    
-                    if not subscribed:
-                        all_subscribed = False
-                        missing_channels.append({
-                            'id': channel_id,
-                            'name': name,
-                            'url': url,
-                            'type': 'public'
-                        })
             except Exception as e:
-                logger.error(f"Ошибка проверки канала {name}: {e}")
+                logger.error(f"❌ Критическая ошибка проверки канала '{name}': {e}")
                 all_subscribed = False
                 missing_channels.append({
                     'id': channel_id,
@@ -271,6 +314,7 @@ async def check_user_subscriptions(user_id, bot):
     
     return all_subscribed, missing_channels
 
+# ===== ОСНОВНЫЕ КОМАНДЫ =====
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
     user = update.effective_user
@@ -582,12 +626,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.answer("❌ Нет доступа")
     
-    # 🔧 ИСПРАВЛЕННЫЙ БЛОК: Кнопка добавления по ID
     elif data == "add_channel_id":
         if user.id == ADMIN_ID:
             context.user_data['awaiting_channel'] = 'by_id'
-            # Упрощенное сообщение без сложной разметки
-            message_text = (
+            await query.edit_message_text(
                 "🆔 *Добавить канал по ID*\n\n"
                 "Отправьте в формате:\n"
                 "`chat_id Название канала`\n\n"
@@ -598,25 +640,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "• Или используйте @RawDataBot\n"
                 "• ID канала обычно начинается с -100"
             )
-            try:
-                await query.edit_message_text(
-                    message_text,
-                    parse_mode='Markdown'
-                )
-            except Exception as e:
-                logger.error(f"Ошибка отправки сообщения: {e}")
-                # Резервный вариант без разметки
-                await query.edit_message_text(
-                    "🆔 Добавить канал по ID\n\n"
-                    "Отправьте в формате:\n"
-                    "chat_id Название канала\n\n"
-                    "Пример:\n"
-                    "-1001234567890 Мой Канал\n\n"
-                    "Где взять chat ID?\n"
-                    "• Добавьте @getmyid_bot в канал\n"
-                    "• Или используйте @RawDataBot\n"
-                    "• ID канала обычно начинается с -100"
-                )
         else:
             await query.answer("❌ Нет доступа")
     
@@ -721,7 +744,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     await update.message.reply_text("❌ Неверный формат. Используйте: ссылка Название")
             
-            # 🔧 ИСПРАВЛЕННЫЙ БЛОК: Обработчик для добавления по ID
             elif channel_type == 'by_id':
                 parts = text.split(' ', 1)
                 if len(parts) == 2:
@@ -816,9 +838,9 @@ def main():
     """Запуск бота"""
     print("🚀 Запуск исправленной версии бота...")
     print("🔧 Основные исправления:")
-    print("   • Исправлена кнопка 'Добавить по ID'")
-    print("   • Добавлен обработчик ошибок")
-    print("   • Упрощена разметка сообщений")
+    print("   • Улучшена проверка подписок с приоритетом по chat_id")
+    print("   • Добавлено детальное логирование ошибок")
+    print("   • Улучшена обработка исключений 'Chat not found'")
     
     try:
         application = Application.builder().token(BOT_TOKEN).build()
@@ -837,7 +859,7 @@ def main():
         application.post_init = set_commands
         
         print("✅ Бот запущен!")
-        print("📝 Для тестирования кнопки добавления по ID:")
+        print("📝 Для добавления канала по ID:")
         print("   1. Напишите /admin")
         print("   2. Нажмите 'Управление каналами'") 
         print("   3. Нажмите '🆔 Добавить по ID'")
