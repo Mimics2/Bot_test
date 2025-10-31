@@ -150,6 +150,7 @@ class Database:
             )
             conn.commit()
             conn.close()
+            logger.info(f"✅ Подписка подтверждена: user_id={user_id}, channel_id={channel_id}")
             return True
         except Exception as e:
             logger.error(f"Ошибка подтверждения подписки: {e}")
@@ -210,35 +211,49 @@ class Database:
 # Инициализация базы данных
 db = Database(DB_PATH)
 
-# ===== ПРОСТАЯ ПРОВЕРКА ПОДПИСОК =====
+# ===== УЛУЧШЕННАЯ ПРОВЕРКА ПОДПИСОК =====
 async def check_user_subscriptions(user_id, bot):
-    """Простая проверка подписок - только приватные каналы"""
+    """Проверка подписок пользователя"""
     channels = db.get_channels()
     missing_channels = []
-    all_subscribed = True
     
+    logger.info(f"🔍 Проверка подписок для пользователя {user_id}")
+    logger.info(f"📊 Всего каналов в базе: {len(channels)}")
+    
+    # Проверяем все каналы
     for channel in channels:
         channel_id, url, name, channel_type = channel
+        logger.info(f"🔍 Проверка канала '{name}' (тип: {channel_type})")
         
         if channel_type == 'public':
             # Для публичных каналов всегда считаем, что нужно подписаться
-            all_subscribed = False
+            # (так как автоматическая проверка не работает)
             missing_channels.append({
                 'id': channel_id,
                 'name': name,
                 'url': url,
                 'type': 'public'
             })
+            logger.info(f"📢 Публичный канал '{name}' требует подписки")
         
         elif channel_type == 'private':
-            if not db.is_subscribed(user_id, channel_id):
-                all_subscribed = False
+            # Для приватных каналов проверяем подтверждение в базе
+            is_subscribed = db.is_subscribed(user_id, channel_id)
+            logger.info(f"🔒 Приватный канал '{name}' - подписка подтверждена: {is_subscribed}")
+            
+            if not is_subscribed:
                 missing_channels.append({
                     'id': channel_id,
                     'name': name,
                     'url': url,
                     'type': 'private'
                 })
+    
+    logger.info(f"📋 Найдено неподписанных каналов: {len(missing_channels)}")
+    
+    # Пользователь подписан на все, если нет неподписанных каналов
+    all_subscribed = len(missing_channels) == 0
+    logger.info(f"✅ Пользователь подписан на все каналы: {all_subscribed}")
     
     return all_subscribed, missing_channels
 
@@ -268,10 +283,16 @@ async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db.add_user(user.id, user.username, user.full_name)
     
-    await update.message.reply_text("🔍 Проверяю подписки...")
+    # Отправляем сообщение о проверке
+    if update.callback_query:
+        await update.callback_query.edit_message_text("🔍 Проверяю подписки...")
+    else:
+        await update.message.reply_text("🔍 Проверяю подписки...")
     
+    # Проверяем подписки
     all_subscribed, missing_channels = await check_user_subscriptions(user.id, context.bot)
     
+    # Показываем результат
     if all_subscribed:
         await show_final_content(update, context)
     else:
@@ -280,10 +301,11 @@ async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_subscription_requests(update: Update, context: ContextTypes.DEFAULT_TYPE, missing_channels):
     """Показать запросы на подписку с красивым оформлением"""
     if not missing_channels:
+        message_text = "✅ Вы подписаны на все каналы!"
         if update.callback_query:
-            await update.callback_query.edit_message_text("✅ Вы подписаны на все каналы!")
+            await update.callback_query.edit_message_text(message_text)
         else:
-            await update.message.reply_text("✅ Вы подписаны на все каналы!")
+            await update.message.reply_text(message_text)
         return
     
     # Разделяем каналы по типам
@@ -544,7 +566,7 @@ async def show_delete_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
 
-# 🔧 ОБРАБОТЧИК КНОПОК
+# 🔧 ИСПРАВЛЕННЫЙ ОБРАБОТЧИК КНОПОК
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик нажатий кнопок"""
     query = update.callback_query
@@ -557,9 +579,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         if data == "check_subs":
+            # 🔧 ИСПРАВЛЕНИЕ: Добавляем пользователя и проверяем подписки
             db.add_user(user.id, user.username, user.full_name)
+            
+            # Показываем сообщение о проверке
+            await query.edit_message_text("🔍 Проверяю подписки...")
+            
+            # Проверяем подписки
             all_subscribed, missing_channels = await check_user_subscriptions(user.id, context.bot)
             
+            # Показываем результат
             if all_subscribed:
                 await show_final_content(update, context)
             else:
@@ -570,6 +599,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             if db.confirm_subscription(user.id, channel_id):
                 await query.answer("✅ Подписка подтверждена!")
+                
+                # 🔧 ИСПРАВЛЕНИЕ: После подтверждения проверяем все подписки
                 all_subscribed, missing_channels = await check_user_subscriptions(user.id, context.bot)
                 
                 if all_subscribed:
@@ -789,12 +820,12 @@ async def set_commands(application: Application):
 
 def main():
     """Запуск бота"""
-    print("🚀 Запуск бота с красивым оформлением...")
-    print("🎨 Основные улучшения:")
-    print("   • Красивые ссылки на публичные каналы в тексте")
-    print("   • Markdown форматирование")
-    print("   • Эмодзи и визуальное разделение")
-    print("   • Улучшенный дизайн сообщений")
+    print("🚀 Запуск бота с исправленной проверкой подписок...")
+    print("🔧 Основные исправления:")
+    print("   • Улучшена логика проверки подписок")
+    print("   • Добавлено детальное логирование")
+    print("   • Исправлена работа кнопки 'Проверить подписки'")
+    print("   • Улучшена обработка подтверждений")
     
     try:
         application = Application.builder().token(BOT_TOKEN).build()
@@ -810,7 +841,7 @@ def main():
         application.post_init = set_commands
         
         print("✅ Бот запущен!")
-        print("📝 Теперь публичные каналы отображаются как красивые ссылки в тексте!")
+        print("📝 Теперь кнопка 'Проверить подписки' должна работать корректно!")
         
         application.run_polling()
         
