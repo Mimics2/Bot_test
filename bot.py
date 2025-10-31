@@ -278,7 +278,7 @@ async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_subscription_requests(update, context, missing_channels)
 
 async def show_subscription_requests(update: Update, context: ContextTypes.DEFAULT_TYPE, missing_channels):
-    """Показать запросы на подписку"""
+    """Показать запросы на подписку с красивым оформлением"""
     if not missing_channels:
         if update.callback_query:
             await update.callback_query.edit_message_text("✅ Вы подписаны на все каналы!")
@@ -286,34 +286,57 @@ async def show_subscription_requests(update: Update, context: ContextTypes.DEFAU
             await update.message.reply_text("✅ Вы подписаны на все каналы!")
         return
     
+    # Разделяем каналы по типам
+    public_channels = [ch for ch in missing_channels if ch['type'] == 'public']
+    private_channels = [ch for ch in missing_channels if ch['type'] == 'private']
+    
+    # Формируем красивое сообщение
+    message_text = "📋 *Необходимо подписаться на следующие каналы:*\n\n"
+    
+    # Публичные каналы - красивые ссылки в тексте
+    if public_channels:
+        message_text += "🔓 *Публичные каналы:*\n"
+        for channel in public_channels:
+            message_text += f"➤ [{channel['name']}]({channel['url']})\n"
+        message_text += "\n"
+    
+    # Приватные каналы - тоже в тексте, но с пояснением
+    if private_channels:
+        message_text += "🔒 *Приватные каналы:*\n"
+        for channel in private_channels:
+            message_text += f"➤ {channel['name']}\n"
+        message_text += "\n*После подписки нажмите кнопку подтверждения ниже* ⬇️\n"
+    
+    message_text += "\n_После подписки нажмите кнопку проверки_"
+    
+    # Создаем клавиатуру только для приватных каналов и проверки
     keyboard = []
     
-    for channel in missing_channels:
-        if channel['type'] == 'public':
-            keyboard.append([InlineKeyboardButton(f"📢 Подписаться на {channel['name']}", url=channel['url'])])
-        else:
-            keyboard.append([
-                InlineKeyboardButton(f"🔐 {channel['name']}", url=channel['url']),
-                InlineKeyboardButton("✅ Подтвердить", callback_data=f"confirm_{channel['id']}")
-            ])
+    # Кнопки подтверждения для приватных каналов
+    for channel in private_channels:
+        keyboard.append([
+            InlineKeyboardButton(f"✅ Подтвердить {channel['name']}", callback_data=f"confirm_{channel['id']}")
+        ])
     
-    keyboard.append([InlineKeyboardButton("🔄 Проверить снова", callback_data="check_subs")])
+    # Кнопка проверки
+    keyboard.append([InlineKeyboardButton("🔄 Проверить подписки", callback_data="check_subs")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    message_text = "📋 Необходимо подписаться на следующие каналы:\n\n"
-    for channel in missing_channels:
-        if channel['type'] == 'public':
-            message_text += f"• {channel['name']} (публичный)\n"
-        else:
-            message_text += f"• {channel['name']} (приватный - требуется подтверждение)\n"
-    
-    message_text += "\nПосле подписки нажмите кнопку проверки"
-    
     if update.callback_query:
-        await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup)
+        await update.callback_query.edit_message_text(
+            message_text, 
+            reply_markup=reply_markup,
+            parse_mode='Markdown',
+            disable_web_page_preview=True
+        )
     else:
-        await update.message.reply_text(message_text, reply_markup=reply_markup)
+        await update.message.reply_text(
+            message_text, 
+            reply_markup=reply_markup,
+            parse_mode='Markdown',
+            disable_web_page_preview=True
+        )
 
 async def show_final_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать финальный контент"""
@@ -321,14 +344,14 @@ async def show_final_content(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     if not final_channels:
         message_text = """
-✅ Поздравляем!
+🎉 *Поздравляем!*
 
 Вы подписались на все необходимые каналы.
 
 Ссылка на основной контент скоро будет добавлена.
         """
         
-        keyboard = [[InlineKeyboardButton("🔄 Проверить снова", callback_data="check_subs")]]
+        keyboard = [[InlineKeyboardButton("🔄 Проверить подписки", callback_data="check_subs")]]
         
         if update.effective_user.id == ADMIN_ID:
             keyboard.append([InlineKeyboardButton("⚙️ Админ-панель", callback_data="admin_panel")])
@@ -336,19 +359,27 @@ async def show_final_content(update: Update, context: ContextTypes.DEFAULT_TYPE)
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         if update.callback_query:
-            await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup)
+            await update.callback_query.edit_message_text(
+                message_text, 
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
         else:
-            await update.message.reply_text(message_text, reply_markup=reply_markup)
+            await update.message.reply_text(
+                message_text, 
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
         return
     
     channel = final_channels[0]
     channel_id, url, name, description = channel
     
     message_text = f"""
-🎉 Доступ открыт!
+🎊 *Доступ открыт!*
 
-📁 {name}
-{description or 'Эксклюзивный контент'}
+🏷 *{name}*
+{description or '💎 Эксклюзивный контент'}
 
 Нажмите кнопку ниже для перехода 👇
     """
@@ -364,9 +395,17 @@ async def show_final_content(update: Update, context: ContextTypes.DEFAULT_TYPE)
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     if update.callback_query:
-        await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup)
+        await update.callback_query.edit_message_text(
+            message_text, 
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
     else:
-        await update.message.reply_text(message_text, reply_markup=reply_markup)
+        await update.message.reply_text(
+            message_text, 
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
 
 async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать админ-панель"""
@@ -375,14 +414,14 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     final_channels = db.get_final_channels()
     
     message_text = f"""
-⚙️ Панель администратора
+⚙️ *Панель администратора*
 
-📊 Статистика:
+📊 *Статистика:*
 • 👥 Пользователей: {user_count}
 • 📺 Каналов: {len(channels)}
 • 💎 Финальных каналов: {len(final_channels)}
 
-Выберите действие:
+*Выберите действие:*
     """
     
     keyboard = [
@@ -393,9 +432,17 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     if update.callback_query:
-        await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup)
+        await update.callback_query.edit_message_text(
+            message_text, 
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
     else:
-        await update.message.reply_text(message_text, reply_markup=reply_markup)
+        await update.message.reply_text(
+            message_text, 
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
 
 async def show_manage_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать управление каналами"""
@@ -403,9 +450,9 @@ async def show_manage_channels(update: Update, context: ContextTypes.DEFAULT_TYP
     final_channels = db.get_final_channels()
     
     message_text = f"""
-📊 Управление каналами
+📊 *Управление каналами*
 
-📺 Каналы для подписки ({len(channels)}):
+📺 *Каналы для подписки ({len(channels)}):*
 """
     
     for channel in channels:
@@ -413,7 +460,7 @@ async def show_manage_channels(update: Update, context: ContextTypes.DEFAULT_TYP
         type_icon = "🔓" if channel_type == 'public' else "🔒"
         message_text += f"{type_icon} {name}\n"
     
-    message_text += f"\n💎 Финальные каналы ({len(final_channels)}):\n"
+    message_text += f"\n💎 *Финальные каналы ({len(final_channels)}):*\n"
     
     for channel in final_channels:
         channel_id, url, name, description = channel
@@ -436,9 +483,17 @@ async def show_manage_channels(update: Update, context: ContextTypes.DEFAULT_TYP
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     if update.callback_query:
-        await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup)
+        await update.callback_query.edit_message_text(
+            message_text, 
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
     else:
-        await update.message.reply_text(message_text, reply_markup=reply_markup)
+        await update.message.reply_text(
+            message_text, 
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
 
 async def show_delete_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать каналы для удаления"""
@@ -448,7 +503,7 @@ async def show_delete_channels(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.callback_query.answer("❌ Нет каналов для удаления", show_alert=True)
         return
     
-    message_text = "🗑 Выберите канал для удаления:"
+    message_text = "🗑 *Выберите канал для удаления:*"
     
     keyboard = []
     for channel in channels:
@@ -459,7 +514,11 @@ async def show_delete_channels(update: Update, context: ContextTypes.DEFAULT_TYP
     keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="manage_channels")])
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup)
+    await update.callback_query.edit_message_text(
+        message_text, 
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
 
 async def show_delete_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать финальные каналы для удаления"""
@@ -469,7 +528,7 @@ async def show_delete_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.answer("❌ Нет финальных каналов для удаления", show_alert=True)
         return
     
-    message_text = "🗑 Выберите финальный канал для удаления:"
+    message_text = "🗑 *Выберите финальный канал для удаления:*"
     
     keyboard = []
     for channel in channels:
@@ -479,9 +538,13 @@ async def show_delete_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="manage_channels")])
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup)
+    await update.callback_query.edit_message_text(
+        message_text, 
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
 
-# 🔧 ИСПРАВЛЕННЫЙ ОБРАБОТЧИК КНОПОК
+# 🔧 ОБРАБОТЧИК КНОПОК
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик нажатий кнопок"""
     query = update.callback_query
@@ -493,7 +556,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Нажата кнопка: {data} пользователем {user.id}")
     
     try:
-        # 🔧 ПРОСТЫЕ И УНИФИЦИРОВАННЫЕ CALLBACK_DATA
         if data == "check_subs":
             db.add_user(user.id, user.username, user.full_name)
             all_subscribed, missing_channels = await check_user_subscriptions(user.id, context.bot)
@@ -533,11 +595,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if user.id == ADMIN_ID:
                 context.user_data['awaiting_channel'] = 'public'
                 await query.edit_message_text(
-                    "➕ Добавить публичный канал\n\n"
+                    "➕ *Добавить публичный канал*\n\n"
                     "Отправьте в формате:\n"
-                    "ссылка Название канала\n\n"
-                    "Пример:\n"
-                    "https://t.me/mychannel Мой Канал"
+                    "`ссылка Название канала`\n\n"
+                    "📝 *Пример:*\n"
+                    "`https://t.me/mychannel Мой Канал`",
+                    parse_mode='Markdown'
                 )
             else:
                 await query.answer("❌ Нет доступа")
@@ -546,11 +609,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if user.id == ADMIN_ID:
                 context.user_data['awaiting_channel'] = 'private'
                 await query.edit_message_text(
-                    "➕ Добавить приватный канал\n\n"
+                    "➕ *Добавить приватный канал*\n\n"
                     "Отправьте пригласительную ссылку и название:\n"
-                    "ссылка Название канала\n\n"
-                    "Пример:\n"
-                    "https://t.me/+ABC123def456 Приватный Канал"
+                    "`ссылка Название канала`\n\n"
+                    "📝 *Пример:*\n"
+                    "`https://t.me/+ABC123def456 Приватный Канал`",
+                    parse_mode='Markdown'
                 )
             else:
                 await query.answer("❌ Нет доступа")
@@ -559,11 +623,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if user.id == ADMIN_ID:
                 context.user_data['awaiting_channel'] = 'final'
                 await query.edit_message_text(
-                    "💎 Добавить финальный канал\n\n"
+                    "💎 *Добавить финальный канал*\n\n"
                     "Отправьте в формате:\n"
-                    "ссылка Название Описание\n\n"
-                    "Пример:\n"
-                    "https://t.me/premium Премиум Эксклюзивный контент"
+                    "`ссылка Название Описание`\n\n"
+                    "📝 *Пример:*\n"
+                    "`https://t.me/premium Премиум Эксклюзивный контент`",
+                    parse_mode='Markdown'
                 )
             else:
                 await query.answer("❌ Нет доступа")
@@ -629,19 +694,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                     if db.add_channel(url, name, 'public'):
                         await update.message.reply_text(
-                            f"✅ Публичный канал добавлен!\n\n"
-                            f"📝 Название: {name}\n"
-                            f"🔗 Ссылка: {url}"
+                            f"✅ *Публичный канал добавлен!*\n\n"
+                            f"🏷 *Название:* {name}\n"
+                            f"🔗 *Ссылка:* {url}",
+                            parse_mode='Markdown'
                         )
                         await show_manage_channels(update, context)
                     else:
                         await update.message.reply_text("❌ Ошибка добавления канала")
                 else:
                     await update.message.reply_text(
-                        "❌ Неверный формат. Используйте:\n"
-                        "ссылка Название канала\n\n"
-                        "Пример:\n"
-                        "https://t.me/mychannel Мой Канал"
+                        "❌ *Неверный формат.* Используйте:\n"
+                        "`ссылка Название канала`\n\n"
+                        "*Пример:*\n"
+                        "`https://t.me/mychannel Мой Канал`",
+                        parse_mode='Markdown'
                     )
             
             elif channel_type == 'private':
@@ -652,19 +719,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                     if db.add_channel(url, name, 'private'):
                         await update.message.reply_text(
-                            f"✅ Приватный канал добавлен!\n\n"
-                            f"📝 Название: {name}\n"
-                            f"🔗 Ссылка: {url}"
+                            f"✅ *Приватный канал добавлен!*\n\n"
+                            f"🏷 *Название:* {name}\n"
+                            f"🔗 *Ссылка:* {url}",
+                            parse_mode='Markdown'
                         )
                         await show_manage_channels(update, context)
                     else:
                         await update.message.reply_text("❌ Ошибка добавления канала")
                 else:
                     await update.message.reply_text(
-                        "❌ Неверный формат. Используйте:\n"
-                        "ссылка Название канала\n\n"
-                        "Пример:\n"
-                        "https://t.me/+ABC123def456 Приватный Канал"
+                        "❌ *Неверный формат.* Используйте:\n"
+                        "`ссылка Название канала`\n\n"
+                        "*Пример:*\n"
+                        "`https://t.me/+ABC123def456 Приватный Канал`",
+                        parse_mode='Markdown'
                     )
             
             elif channel_type == 'final':
@@ -676,10 +745,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                     if db.add_final_channel(url, name, description):
                         await update.message.reply_text(
-                            f"💎 Финальный канал добавлен!\n\n"
-                            f"📝 Название: {name}\n"
-                            f"🔗 Ссылка: {url}\n"
-                            f"📄 Описание: {description or 'не указано'}"
+                            f"💎 *Финальный канал добавлен!*\n\n"
+                            f"🏷 *Название:* {name}\n"
+                            f"🔗 *Ссылка:* {url}\n"
+                            f"📄 *Описание:* {description or 'не указано'}",
+                            parse_mode='Markdown'
                         )
                         await show_manage_channels(update, context)
                     else:
@@ -719,11 +789,12 @@ async def set_commands(application: Application):
 
 def main():
     """Запуск бота"""
-    print("🚀 Запуск бота с исправленными кнопками...")
-    print("🔧 Основные исправления:")
-    print("   • Упрощенные callback_data")
-    print("   • Улучшенная обработка ошибок")
-    print("   • Унифицированные названия кнопок")
+    print("🚀 Запуск бота с красивым оформлением...")
+    print("🎨 Основные улучшения:")
+    print("   • Красивые ссылки на публичные каналы в тексте")
+    print("   • Markdown форматирование")
+    print("   • Эмодзи и визуальное разделение")
+    print("   • Улучшенный дизайн сообщений")
     
     try:
         application = Application.builder().token(BOT_TOKEN).build()
@@ -739,10 +810,7 @@ def main():
         application.post_init = set_commands
         
         print("✅ Бот запущен!")
-        print("📝 Тестирование:")
-        print("   1. Зайдите с двух разных аккаунтов")
-        print("   2. Нажмите /start на каждом")
-        print("   3. Нажмите 'Проверить подписки' на каждом")
+        print("📝 Теперь публичные каналы отображаются как красивые ссылки в тексте!")
         
         application.run_polling()
         
