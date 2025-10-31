@@ -603,10 +603,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['awaiting_channel'] = 'public'
             await query.edit_message_text(
                 "➕ *Добавить публичный канал*\n\n"
-                "Отправьте в формате:\n"
+                "📝 Отправьте в формате:\n"
                 "`@username Название канала`\n\n"
-                "Пример:\n"
-                "`@my_channel Мой Канал`",
+                "✅ Пример:\n"
+                "`@my_channel Мой Канал`\n\n"
+                "🔗 Бот создаст ссылку: https://t.me/my_channel",
                 parse_mode='Markdown'
             )
         else:
@@ -617,10 +618,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['awaiting_channel'] = 'private'
             await query.edit_message_text(
                 "➕ *Добавить приватный канал*\n\n"
-                "Отправьте в формате:\n"
+                "📝 Отправьте в формате:\n"
                 "`ссылка Название канала`\n\n"
-                "Пример:\n"
-                "`https://t.me/private_channel Приватный Канал`",
+                "✅ Пример:\n"
+                "`https://t.me/+ABC123def456 Приватный Канал`\n\n"
+                "⚠️ Используйте пригласительные ссылки из настроек канала!",
                 parse_mode='Markdown'
             )
         else:
@@ -631,14 +633,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['awaiting_channel'] = 'by_id'
             await query.edit_message_text(
                 "🆔 *Добавить канал по ID*\n\n"
-                "Отправьте в формате:\n"
-                "`chat_id Название канала`\n\n"
+                "⚠️ *Внимание!* Этот метод создает ссылку формата https://t.me/c/ID\n"
+                "*Такая ссылка может не работать для пользователей!*\n\n"
+                "✅ *Рекомендуемые методы:*\n"
+                "• Для публичных каналов: используйте '@username'\n"
+                "• Для приватных каналов: используйте пригласительные ссылки\n\n"
+                "Если все равно хотите добавить по ID:\n"
+                "📝 Отправьте в формате:\n"
+                "`chat_id Название_канала`\n\n"
                 "Пример:\n"
-                "`-1001234567890 Мой Канал`\n\n"
-                "Где взять chat ID?\n"
-                "• Добавьте @getmyid_bot в канал\n"
-                "• Или используйте @RawDataBot\n"
-                "• ID канала обычно начинается с -100"
+                "`-1001234567890 Мой Канал`",
+                parse_mode='Markdown'
             )
         else:
             await query.answer("❌ Нет доступа")
@@ -648,9 +653,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['awaiting_channel'] = 'final'
             await query.edit_message_text(
                 "💎 *Добавить финальный канал*\n\n"
-                "Отправьте в формате:\n"
+                "📝 Отправьте в формате:\n"
                 "`ссылка Название Описание`\n\n"
-                "Пример:\n"
+                "✅ Пример:\n"
                 "`https://t.me/premium Премиум Эксклюзивный контент`",
                 parse_mode='Markdown'
             )
@@ -720,15 +725,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if len(parts) == 2 and parts[0].startswith('@'):
                     username = parts[0]
                     name = parts[1]
-                    url = f"https://t.me/{username.lstrip('@')}"
+                    # 🔧 ИСПРАВЛЕНИЕ: Правильная ссылка для публичного канала
+                    clean_username = username.lstrip('@')
+                    url = f"https://t.me/{clean_username}"
                     
                     if db.add_channel(username, url, name, 'public'):
-                        await update.message.reply_text(f"✅ Публичный канал добавлен:\n{name}\n{url}")
+                        await update.message.reply_text(
+                            f"✅ *Публичный канал добавлен!*\n\n"
+                            f"📝 Название: {name}\n"
+                            f"🔗 Ссылка: {url}\n"
+                            f"👤 Username: {username}",
+                            parse_mode='Markdown'
+                        )
                         await show_manage_channels(update, context)
                     else:
                         await update.message.reply_text("❌ Ошибка добавления канала")
                 else:
-                    await update.message.reply_text("❌ Неверный формат. Используйте: @username Название")
+                    await update.message.reply_text(
+                        "❌ Неверный формат. Используйте:\n"
+                        "`@username Название канала`\n\n"
+                        "Пример:\n"
+                        "`@my_channel Мой Канал`",
+                        parse_mode='Markdown'
+                    )
             
             elif channel_type == 'private':
                 parts = text.split(' ', 1)
@@ -736,14 +755,39 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     url = parts[0]
                     name = parts[1]
                     
+                    # 🔧 ПРОВЕРКА: Убедимся что ссылка правильная
+                    if not (url.startswith('https://t.me/+') or url.startswith('https://t.me/joinchat/')):
+                        await update.message.reply_text(
+                            "⚠️ *Внимание! Неправильный формат ссылки!*\n\n"
+                            "✅ Для приватного канала используйте пригласительную ссылку формата:\n"
+                            "• `https://t.me/+xxxxxxxxxx`\n"
+                            "• `https://t.me/joinchat/xxxxxxxx`\n\n"
+                            "📝 Создайте ссылку в настройках канала: \n"
+                            "Канал → Информация → Пригласительные ссылки",
+                            parse_mode='Markdown'
+                        )
+                        return
+                    
                     if db.add_channel(None, url, name, 'private'):
-                        await update.message.reply_text(f"✅ Приватный канал добавлен:\n{name}\n{url}")
+                        await update.message.reply_text(
+                            f"✅ *Приватный канал добавлен!*\n\n"
+                            f"📝 Название: {name}\n"
+                            f"🔗 Ссылка: {url}",
+                            parse_mode='Markdown'
+                        )
                         await show_manage_channels(update, context)
                     else:
                         await update.message.reply_text("❌ Ошибка добавления канала")
                 else:
-                    await update.message.reply_text("❌ Неверный формат. Используйте: ссылка Название")
+                    await update.message.reply_text(
+                        "❌ Неверный формат. Используйте:\n"
+                        "`ссылка Название канала`\n\n"
+                        "Пример:\n"
+                        "`https://t.me/+ABC123def456 Приватный Канал`",
+                        parse_mode='Markdown'
+                    )
             
+            # 🔧 КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Правильное формирование ссылки для каналов по ID
             elif channel_type == 'by_id':
                 parts = text.split(' ', 1)
                 if len(parts) == 2:
@@ -752,24 +796,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                     try:
                         chat_id = int(chat_id_str)
-                        # Формируем URL для канала
+                        
+                        # 🔧 ИСПРАВЛЕНИЕ: Правильное формирование ссылки
                         if chat_id < 0:
                             # Для каналов и супергрупп
-                            clean_id = str(abs(chat_id))
-                            if clean_id.startswith('100'):
-                                clean_id = clean_id[3:]
-                            url = f"https://t.me/c/{clean_id}"
+                            url = f"https://t.me/c/{abs(chat_id)}"
+                            
+                            await update.message.reply_text(
+                                f"⚠️ *Внимание! Ограниченная функциональность!*\n\n"
+                                f"✅ Канал по ID добавлен:\n"
+                                f"📝 Название: {name}\n"
+                                f"🆔 ID: {chat_id}\n"
+                                f"🔗 Ссылка: {url}\n\n"
+                                f"❌ *Проблемы:*\n"
+                                f"• Ссылка может не работать для пользователей\n"
+                                f"• Проверка подписки может не работать\n\n"
+                                f"💡 *Рекомендация:*\n"
+                                f"Используйте добавление по @username для публичных каналов",
+                                parse_mode='Markdown'
+                            )
                         else:
                             # Для пользователей (обычно не используется для каналов)
                             url = f"https://t.me/{chat_id}"
                         
                         if db.add_channel(None, url, name, 'public', chat_id):
-                            await update.message.reply_text(
-                                f"✅ Канал по ID добавлен:\n"
-                                f"📝 Название: {name}\n"
-                                f"🆔 ID: {chat_id}\n"
-                                f"🔗 Ссылка: {url}"
-                            )
                             await show_manage_channels(update, context)
                         else:
                             await update.message.reply_text("❌ Ошибка добавления канала")
@@ -786,7 +836,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     description = parts[2] if len(parts) > 2 else ""
                     
                     if db.add_final_channel(url, name, description):
-                        await update.message.reply_text(f"💎 Финальный канал добавлен:\n{name}\n{url}")
+                        await update.message.reply_text(
+                            f"💎 *Финальный канал добавлен!*\n\n"
+                            f"📝 Название: {name}\n"
+                            f"🔗 Ссылка: {url}\n"
+                            f"📄 Описание: {description or 'не указано'}",
+                            parse_mode='Markdown'
+                        )
                         await show_manage_channels(update, context)
                     else:
                         await update.message.reply_text("❌ Ошибка добавления канала")
@@ -838,9 +894,10 @@ def main():
     """Запуск бота"""
     print("🚀 Запуск исправленной версии бота...")
     print("🔧 Основные исправления:")
-    print("   • Улучшена проверка подписок с приоритетом по chat_id")
-    print("   • Добавлено детальное логирование ошибок")
-    print("   • Улучшена обработка исключений 'Chat not found'")
+    print("   • Правильное формирование ссылок для публичных каналов")
+    print("   • Проверка формата ссылок для приватных каналов")
+    print("   • Улучшенные сообщения об ошибках")
+    print("   • Предупреждения о проблемных ссылках")
     
     try:
         application = Application.builder().token(BOT_TOKEN).build()
@@ -859,11 +916,10 @@ def main():
         application.post_init = set_commands
         
         print("✅ Бот запущен!")
-        print("📝 Для добавления канала по ID:")
-        print("   1. Напишите /admin")
-        print("   2. Нажмите 'Управление каналами'") 
-        print("   3. Нажмите '🆔 Добавить по ID'")
-        print("   4. Отправьте: -1001234567890 Тестовый канал")
+        print("📝 Рекомендации по добавлению каналов:")
+        print("   • Публичные каналы: @username Название")
+        print("   • Приватные каналы: пригласительная ссылка Название")
+        print("   • Избегайте добавления по ID - создает нерабочие ссылки")
         
         application.run_polling()
         
